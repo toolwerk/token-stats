@@ -107,7 +107,7 @@ public sealed class AccountTests : IDisposable
         Assert.False(entry.ShowsAsChecked(hidden: true));
         Assert.Equal("Ordner nicht gefunden. Das Konto steht grau im Menü. Ist das Laufwerk eingehängt, wird es wieder abgefragt.",
                      AccountEntry.MissingFolderHint(hidden: false));
-        Assert.Equal("Ordner nicht gefunden. Das Konto ist ausgeblendet.", AccountEntry.MissingFolderHint(hidden: true));
+        Assert.Equal("Ordner nicht gefunden.", AccountEntry.MissingFolderHint(hidden: true));
 
         // Im Popup sichtbar (grau mit „!“), aber nicht abgefragt und nicht im Verbrauch.
         var store = new UsageStore([], new AppSettings(), cachePath: null, () => discovery.Accounts(AccountDiscovery.FolderKind.Claude));

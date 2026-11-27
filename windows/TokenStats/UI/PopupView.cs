@@ -448,7 +448,8 @@ public sealed class PopupView
         var icon = Ui.Icon("\uE7BA", 11, color);
         icon.VerticalAlignment = VerticalAlignment.Top;
         icon.Margin = new Thickness(0, 2, 0, 0);
-        var label = Ui.Prose(text, 11, color, Ui.Font);
+        // Text in eigener Textfarbe mit mindestens 4,5 : 1 (Palette.SeverityTextBrush), Symbol in der Zustandsfarbe.
+        var label = Ui.Prose(text, 11, p.SeverityTextBrush(severity), Ui.Font);
         label.Margin = new Thickness(6, 0, 0, 0);
         var hint = new Grid();
         hint.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -518,7 +519,7 @@ public sealed class PopupView
         var icon = Ui.Icon(glyph, 11, color);
         icon.VerticalAlignment = VerticalAlignment.Top;
         icon.Margin = new Thickness(0, 2, 0, 0);
-        var label = Ui.Prose(text, 11, color, Ui.Font);
+        var label = Ui.Prose(text, 11, severity is { } textLevel ? p.SeverityTextBrush(textLevel) : p.Secondary, Ui.Font);
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });

@@ -207,9 +207,12 @@ public sealed class SettingsWindow : Window
         else
         {
             // Angehakt = anzeigen; ein Klick auf den Namen schaltet mit.
+            var label = store.Label(provider) ?? provider.DisplayName;
             var show = new CheckBox
             {
-                Content = Wrapped(store.Label(provider) ?? provider.DisplayName),
+                // Deaktiviert (Ordner fehlt) wäre die Beschriftung grau: Dann steht der Name daneben in
+                // der normalen Schrift, und die Checkbox trägt ihn nur für Screenreader.
+                Content = missing ? null : Wrapped(label),
                 // Fehlt der Ordner: leer und deaktiviert, ob ausgeblendet oder nicht.
                 IsChecked = entry.ShowsAsChecked(hidden),
                 IsEnabled = !missing,
@@ -223,15 +226,37 @@ public sealed class SettingsWindow : Window
                 settings.SetHidden(id, show.IsChecked != true);
                 AccountsChanged();
             };
-            var name = new WrapPanel();
-            name.Children.Add(show);
-            name.Children.Add(Badge(entry.Source.Origin switch
+            System.Windows.Automation.AutomationProperties.SetName(show, label);
+            var badge = Badge(entry.Source.Origin switch
             {
                 AccountOrigin.Standard => "Standard",
                 AccountOrigin.Detected => "automatisch gefunden",
                 _ => "von Hand",
-            }));
-            text.Children.Add(name);
+            });
+            if (missing)
+            {
+                // Kästchen links, daneben Name und Abzeichen; der Name bricht neben dem Kästchen um.
+                show.Margin = new Thickness(0);
+                show.VerticalAlignment = VerticalAlignment.Top;
+                DockPanel.SetDock(show, Dock.Left);
+                var nameText = Wrapped(label);
+                nameText.VerticalAlignment = VerticalAlignment.Center;
+                nameText.Margin = new Thickness(0, 0, 8, 0);
+                var labels = new WrapPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+                labels.Children.Add(nameText);
+                labels.Children.Add(badge);
+                var row = new DockPanel { LastChildFill = true };
+                row.Children.Add(show);
+                row.Children.Add(labels);
+                text.Children.Add(row);
+            }
+            else
+            {
+                var name = new WrapPanel();
+                name.Children.Add(show);
+                name.Children.Add(badge);
+                text.Children.Add(name);
+            }
         }
 
         // E-Mail aus der Kontodatei, sonst aus dem letzten Abruf (Codex nennt dort die E-Mail).
@@ -508,7 +533,8 @@ public sealed class SettingsWindow : Window
             Margin = new Thickness(0, 2, 8, 0),
             VerticalAlignment = VerticalAlignment.Top,
         };
-        var label = Ui.Prose(text, 12);
+        // Fehler in eigener Textfarbe (mindestens 4,5 : 1 auf der Fläche), sonst die Fensterschrift.
+        var label = Ui.Prose(text, 12, severity == Severity.Crit ? palette.SeverityTextBrush(Severity.Crit) : null);
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
