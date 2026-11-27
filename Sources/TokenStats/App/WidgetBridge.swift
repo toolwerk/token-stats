@@ -11,6 +11,8 @@ import WidgetKit
 /// Die Erweiterung liest nur diese Datei – keine Zugangsdaten, kein `usage.sqlite`, keine
 /// Endpunkte. Ein neuer Limit-Stand lädt sofort neu; Verbrauchsänderungen allein höchstens
 /// alle fünf Minuten, wie der Abfragetakt, damit das Neuladen nicht im Minutentakt läuft.
+/// Ein Abruf ohne neuen Inhalt (nur `fetchedAt` neu) schreibt die Datei, lädt aber nicht
+/// neu – sonst verbraucht jeder Abruf Budget von WidgetKit (`WidgetReload`).
 @MainActor
 final class WidgetBridge {
     private let store: UsageStore
@@ -18,13 +20,13 @@ final class WidgetBridge {
     private let settings: AppSettings
 
     private var lastWritten: WidgetSnapshot?
+    /// Der Stand beim letzten Neuladen – damit vergleicht `WidgetReload`.
+    private var lastReloaded: WidgetSnapshot?
     private var lastReload: Date = .distantPast
     private var lastPublished: WidgetSnapshot?
     private var publishing = false
     private var pendingWrite: Task<Void, Never>?
     private var pendingReload: Task<Void, Never>?
-
-    static let usageReloadInterval: TimeInterval = 300
 
     init(store: UsageStore, consumption: ConsumptionStore, settings: AppSettings) {
         self.store = store
@@ -91,25 +93,34 @@ final class WidgetBridge {
             NSLog("Token Stats: Widget-Stand nicht schreibbar: \(error.localizedDescription)")
             return
         }
-        let limitsChanged = lastWritten.map { $0.providers != snapshot.providers || $0.showMoney != snapshot.showMoney } ?? true
+        // Neuer Abruf, auch ohne neuen Inhalt: Das iPhone soll den frischen Stand sehen
+        // („vor 2 Min.“), wie vor der Trennung von Schreiben und Neuladen.
+        let fetched = lastWritten.map { $0.providers != snapshot.providers } ?? true
         lastWritten = snapshot
-        let due = lastReload.addingTimeInterval(Self.usageReloadInterval)
-        if limitsChanged || due <= .now {
+        switch WidgetReload.decide(shown: lastReloaded, current: snapshot, lastReload: lastReload, now: .now) {
+        case .now:
             reload()
-        } else if pendingReload == nil {
-            pendingReload = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(max(due.timeIntervalSinceNow, 1)))
-                guard !Task.isCancelled else { return }
-                self?.pendingReload = nil
-                self?.reload()
+            return
+        case .at(let due):
+            if pendingReload == nil {
+                pendingReload = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(max(due.timeIntervalSinceNow, 1)))
+                    guard !Task.isCancelled else { return }
+                    self?.pendingReload = nil
+                    self?.reload()
+                }
             }
+        case .skip:
+            break
         }
+        if fetched { publish() }
     }
 
     private func reload() {
         pendingReload?.cancel()
         pendingReload = nil
         lastReload = .now
+        lastReloaded = lastWritten
         WidgetCenter.shared.reloadAllTimelines()
         publish()
     }

@@ -424,8 +424,18 @@ Mitteilungszentrale und Schreibtisch, je klein, mittel und groß.
   Group – Limits je Anbieter und die fertig gerechneten Zusammenfassungen je Zeitraum,
   einige Kilobyte – und stößt `reloadAllTimelines()` an. Ein neuer Limit-Stand lädt
   sofort neu, Verbrauchsänderungen allein höchstens alle 300 s (wie der Abfragetakt),
-  damit das Neuladen nicht im 60-s-Takt des Log-Scans läuft. Timeline: eine Entry,
-  `policy: .never`. Ohne Datei zeigt das Widget „Token Stats öffnen“ statt Nullwerten.
+  damit das Neuladen nicht im 60-s-Takt des Log-Scans läuft. Ein Abruf ohne neuen Inhalt
+  (nur `fetchedAt` neu, Reset-Zeit auf unter 60 s gleich) schreibt die Datei, lädt aber
+  nicht neu: Das Budget von WidgetKit ist knapp, und ist es aufgebraucht, bleiben die
+  Widgets stehen (`WidgetReload` in TokenStatsCore). Die iCloud-Übertragung folgt weiter
+  jedem neuen Abruf, damit das iPhone „vor 2 Min.“ zeigt.
+- **Timeline:** Einträge jetzt, dann im 15-Minuten-Raster für 6 h, dazu zu den
+  Reset-Zeiten der Fenster, um lokale Mitternacht und zum Ende des Tages, den „Heute“
+  abdeckt; danach `policy: .after(letzter Eintrag)` (`WidgetTimeline`). Jeder Eintrag zeigt
+  den Stand zu seinem Zeitpunkt: Fenster mit vergangenem Reset stehen auf 0 % wie in der
+  App, „Heute“ fällt nach dem Tageswechsel weg („Keine Einträge“), bis die App neu
+  schreibt. So rücken Pace-Marke und „Reset in …“ weiter, ohne die App aufzuwecken.
+  Ohne Datei zeigt das Widget „Token Stats öffnen“ statt Nullwerten.
 - **App Group mit Team-ID-Präfix** (`<Team-ID>.de.mahype.TokenStats`, nicht `group.…`
   wie im Issue vorgeschlagen): Xcode verlangt für `group.`-Kennungen auf dem Mac ein
   Provisioning-Profil, und macOS lässt nur Apps desselben Teams an den Container –
@@ -434,7 +444,18 @@ Mitteilungszentrale und Schreibtisch, je klein, mittel und groß.
   Info.plist von App und Erweiterung. Im Release ist das `2GA7DQ3P3Z.…`; `sign-sparkle.sh`
   signiert die App mit `--preserve-metadata=entitlements` nach, die App Group bleibt also
   erhalten. Debug-Builds signiert das Makefile mit einem vorhandenen
-  Apple-Development-Zertifikat, sonst ad hoc ohne Widget-Daten.
+  Apple-Development-Zertifikat, sonst mit Developer ID Application, sonst ad hoc ohne
+  Widget-Daten (laute Warnung bei `make build`/`run`/`test`). Ohne Team in der Info.plist
+  gibt es keine App Group – kein stiller Rückfall auf die Release-Gruppe, sondern eine
+  Meldung in der Konsole.
+- **Debug getrennt vom Release:** Configuration Debug hat eigene Kennungen,
+  `de.mahype.TokenStats.debug` und `de.mahype.TokenStats.debug.Widgets`, und die App Group
+  `<Team-ID>.de.mahype.TokenStats.debug`. Sonst verdrängt jeder Worktree-Build die
+  installierte App bei LaunchServices und pluginkit (gleiche Bundle-ID, anderer Pfad), und
+  chronod kann die Widgets aus der falschen, womöglich ad hoc signierten Kopie laden. Release, iOS-Targets, URL-Schema
+  `tokenstats://` und die Widget-`kind`-Kennungen bleiben gleich. Debug hat damit eigene
+  UserDefaults (`de.mahype.TokenStats.debug`); `state.json` und `usage.sqlite` teilen sich
+  Debug und Release weiter.
 - **Gemeinsamer Kern `TokenStatsCore`** (lokales Swift-Paket): `Format`, `ProviderSnapshot`,
   `TokenCounts`/`PriceTable`, `UsagePeriod`/`UsageSummary`, Zustandsfarben, `MeterRow`,
   `DayChart`, die Widget-Views und die Demo-Werte. App und Erweiterung binden es statisch
@@ -451,7 +472,7 @@ selbst und fragt keinen Anbieter ab – es hat weder Zugangsdaten noch Logs.
   `version`, `payload` als JSON). Eigene Zone statt Abfrage, weil `recordZoneChanges`
   keinen Index im CloudKit-Dashboard braucht und eine `CKRecordZoneSubscription` den
   stillen Push liefert. Übertragen wird im Takt der Widget-Timeline (neuer Limit-Stand
-  sofort, Verbrauch allein alle 300 s), nie doppelt.
+  sofort, Verbrauch allein alle 300 s) und bei jedem neuen Abruf, nie doppelt.
 - **Standard aus:** Einstellung „Stand nach iCloud übertragen“ unter „iPhone“, damit
   „keine Cloud“ für Nutzer ohne iPhone weiter gilt. Ausgegraut, wenn der Build keine
   iCloud-Berechtigung trägt (Prüfung per `SecTaskCopyValueForEntitlement`, weil

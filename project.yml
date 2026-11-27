@@ -30,6 +30,12 @@ settings:
     APP_GROUP: "$(DEVELOPMENT_TEAM).de.mahype.TokenStats"
     # Sparkle vergleicht CFBundleVersion mit dem Appcast – darum identisch mit der Version.
     CURRENT_PROJECT_VERSION: "$(MARKETING_VERSION)"
+  configs:
+    # Debug-Builds (make build/run/test, Worktrees) mit eigener App Group, damit sie nicht in
+    # den Container des Release schreiben. Die iOS-Targets setzen APP_GROUP selbst und bleiben
+    # unberührt; Release nutzt weiter die Kennung aus `base`.
+    Debug:
+      APP_GROUP: "$(DEVELOPMENT_TEAM).de.mahype.TokenStats.debug"
 
 targets:
   TokenStats:
@@ -59,6 +65,11 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         ENABLE_APP_SANDBOX: NO
+      # Eigene Kennung für Debug: Sonst verdrängt jeder Worktree-Build die installierte App
+      # samt Widget-Erweiterung bei LaunchServices/pluginkit (gleiche Bundle-ID, anderer Pfad).
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: de.mahype.TokenStats.debug
 
   # WidgetKit-Erweiterung (Issue #10): immer sandboxed, liest nur widgets.json aus der App Group.
   TokenStatsWidgets:
@@ -83,6 +94,9 @@ targets:
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         ENABLE_APP_SANDBOX: YES
         SKIP_INSTALL: YES
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: de.mahype.TokenStats.debug.Widgets
 
   # iOS-App (Issue #11): zeigt den Stand der Macs aus iCloud, rechnet nichts selbst.
   # App Group hier iOS-üblich mit `group.`; der Inhalt kommt aus der privaten CloudKit-Datenbank.

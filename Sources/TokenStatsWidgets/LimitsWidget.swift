@@ -26,6 +26,8 @@ struct LimitsConfigurationIntent: WidgetConfigurationIntent {
 
 // MARK: Timeline
 
+/// Einträge im Viertelstundentakt und zu den Resets (`WidgetTimeline`), damit Pace-Marke und
+/// „Reset in …“ weiterrücken; neuen Inhalt stößt die App per `reloadAllTimelines()` an.
 struct LimitsEntry: TimelineEntry {
     let date: Date
     let snapshot: WidgetSnapshot?
@@ -43,8 +45,12 @@ struct LimitsTimelineProvider: AppIntentTimelineProvider {
     }
 
     func timeline(for configuration: LimitsConfigurationIntent, in context: Context) async -> Timeline<LimitsEntry> {
-        let entry = LimitsEntry(date: .now, snapshot: WidgetSnapshot.loadForWidgets(), provider: configuration.provider.providerID)
-        return Timeline(entries: [entry], policy: .never)
+        let snapshot = WidgetSnapshot.loadForWidgets()
+        let plan = WidgetTimeline.plan(now: .now, snapshot: snapshot)
+        let entries = plan.dates.map {
+            LimitsEntry(date: $0, snapshot: snapshot?.current(at: $0), provider: configuration.provider.providerID)
+        }
+        return Timeline(entries: entries, policy: .after(plan.reloadAfter))
     }
 }
 

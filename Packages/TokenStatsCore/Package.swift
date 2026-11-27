@@ -12,5 +12,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "TokenStatsCore"),
+        // Reine Funktionen ohne App-Host: läuft mit `swift test` auch ohne Xcode.
+        .testTarget(name: "TokenStatsCoreTests", dependencies: ["TokenStatsCore"]),
     ]
 )

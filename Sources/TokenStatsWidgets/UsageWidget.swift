@@ -47,8 +47,9 @@ struct UsageEntry: TimelineEntry {
     let period: UsagePeriod
 }
 
-/// Eine Entry je Aktualisierung, `.never`: Die App stößt das Neuladen an, sobald sie
-/// einen neuen Stand geschrieben hat.
+/// Einträge im Viertelstundentakt und zum Tageswechsel (`WidgetTimeline`), danach `.after`:
+/// „Heute“ springt um Mitternacht auf den neuen Tag, auch wenn die App gerade nichts schreibt.
+/// Neuen Inhalt stößt die App per `reloadAllTimelines()` an.
 struct UsageTimelineProvider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> UsageEntry {
         UsageEntry(date: .now, snapshot: DemoData.widgetSnapshot(now: .now), provider: nil, period: .today)
@@ -61,9 +62,13 @@ struct UsageTimelineProvider: AppIntentTimelineProvider {
     }
 
     func timeline(for configuration: UsageConfigurationIntent, in context: Context) async -> Timeline<UsageEntry> {
-        let entry = UsageEntry(date: .now, snapshot: WidgetSnapshot.loadForWidgets(), provider: configuration.provider.providerID,
-                               period: configuration.period.period)
-        return Timeline(entries: [entry], policy: .never)
+        let snapshot = WidgetSnapshot.loadForWidgets()
+        let plan = WidgetTimeline.plan(now: .now, snapshot: snapshot)
+        let entries = plan.dates.map {
+            UsageEntry(date: $0, snapshot: snapshot?.current(at: $0), provider: configuration.provider.providerID,
+                       period: configuration.period.period)
+        }
+        return Timeline(entries: entries, policy: .after(plan.reloadAfter))
     }
 }
 

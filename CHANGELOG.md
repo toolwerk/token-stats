@@ -3,6 +3,19 @@
 Jede Version hat einen Abschnitt `## X.Y.Z`. `make publish` übernimmt ihn als Text für
 das GitHub-Release und für den Update-Dialog in der App.
 
+## 0.4.1
+
+- **Widgets bleiben aktuell:** Pace-Marke und „Reset in …“ rücken jetzt alle 15 Minuten
+  weiter, ein abgelaufenes Limit steht zur Reset-Zeit auf 0 %, und „Heute“ springt um
+  Mitternacht auf den neuen Tag, auch wenn die App gerade nichts Neues meldet. Die App lädt
+  die Widgets nur noch neu, wenn sich wirklich etwas geändert hat, statt bei jeder Abfrage.
+  Das schont das Kontingent, das macOS fürs Neuladen von Widgets vergibt; ist es
+  aufgebraucht, bleiben Widgets stehen.
+- **Für Entwickler:** Debug-Builds haben eine eigene Bundle-ID (`de.mahype.TokenStats.debug`)
+  und App Group, damit sie die installierte App und ihre Widgets nicht verdrängen.
+  `make build` signiert ersatzweise auch mit „Developer ID Application“ und warnt deutlich,
+  wenn es nur ad hoc signieren kann. `make core-test` testet den gemeinsamen Kern ohne Xcode.
+
 ## 0.4.0
 
 - **Widgets für den Mac:** Zwei neue Widgets für Schreibtisch und Mitteilungszentrale zeigen
