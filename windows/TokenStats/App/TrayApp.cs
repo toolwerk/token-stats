@@ -34,9 +34,11 @@ public sealed class TrayApp : IDisposable
     public TrayApp(bool demo = false)
     {
         Settings = new AppSettings(demo ? null : Path.Combine(DataDirectory, "settings.json"));
-        Store = new UsageStore([new ClaudeProvider(), new CodexProvider(), new AntigravityProvider(), new OllamaProvider()], Settings,
-                               demo ? null : Path.Combine(DataDirectory, "state.json"));
-        Consumption = new ConsumptionStore(Settings, demo ? null : UsageLedger.DefaultPath);
+        // Konten: Standard, %USERPROFILE%\.claude-* usw. und Ordner aus den Einstellungen (SPEC §6).
+        List<IUsageProvider> Discover() => new AccountDiscovery(manualFolders: Settings.AccountFolders).Providers();
+        Store = new UsageStore(demo ? [new ClaudeProvider(), new CodexProvider(), new AntigravityProvider(), new OllamaProvider()] : Discover(),
+                               Settings, demo ? null : Path.Combine(DataDirectory, "state.json"), demo ? null : Discover);
+        Consumption = new ConsumptionStore(Settings, demo ? null : UsageLedger.DefaultPath) { Roots = () => Store.LogRoots };
         popup = new PopupWindow(Store, Consumption, Settings, OpenSettings);
     }
 

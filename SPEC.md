@@ -415,9 +415,14 @@ bleibt Standard. Eine gespeicherte Anbieter-ID wie `claude` zeigt das knappste K
 dieses Anbieters. Das Widget „Verbrauch“ bleibt je Anbieter und trägt dessen Namen. Die
 iOS-App zeigt die Konten über denselben Stand automatisch als eigene Abschnitte.
 
-**Nicht in diesem Schritt:** Windows-Port (dort liegen die Claude-Zugangsdaten nur in
-`<ordner>/.credentials.json`, die Erkennung ließe sich 1:1 übertragen) und
-Linux-Widgets. Account-Wechsel (§7) ist ein anderes Thema: Er tauscht das aktive Login
+**Windows und Linux.** Der Windows-Port setzt dasselbe Modell um: Erkennung von
+`%USERPROFILE%\.claude-*`/`.codex-*`, Ordner in den Einstellungen, gleiche Kennungen
+(Hash über den Windows-Pfad), Tabs, Abschnitt „Konten“, Verbrauch über alle Konten. Die
+Zugangsdaten liegen dort nur in `<ordner>\.credentials.json`. Die Linux-Widgets (nur
+Claude) erkennen `~/.claude-*`, den Ordner aus `CLAUDE_CONFIG_DIR` und Ordner aus
+`TOKENSTATS_CLAUDE_DIRS` (durch `:` getrennt), weil sie keine Einstellungsseite haben.
+
+**Abgrenzung:** Account-Wechsel (§7) ist ein anderes Thema. Er tauscht das aktive Login
 einer CLI. Mehrere Konten zeigen dagegen parallel angemeldete Logins an, ohne an den
 Zugangsdaten etwas zu ändern.
 

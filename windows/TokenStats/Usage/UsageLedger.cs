@@ -51,30 +51,62 @@ public sealed class UsageLedger : IDisposable
 
     // Einlesen
 
-    /// <summary>Liest alle neuen Zeilen seit dem letzten Lauf. Liefert true, wenn sich etwas geändert hat.</summary>
-    public bool Scan()
+    /// <summary>
+    /// Ordner, deren Logs eingelesen werden – je Anbieter die Ordner aller Konten
+    /// (SPEC §6 „Mehrere Konten“): Claude <c>&lt;ordner&gt;\projects</c>, Codex <c>&lt;ordner&gt;</c>.
+    /// </summary>
+    public sealed record Roots(IReadOnlyList<string> Claude, IReadOnlyList<string> Codex)
     {
+        public static Roots Standard(string home) =>
+            new([Path.Combine(home, ".claude", "projects")], [Path.Combine(home, ".codex")]);
+    }
+
+    /// <summary>Liest alle neuen Zeilen seit dem letzten Lauf. Liefert true, wenn sich etwas geändert hat.</summary>
+    public bool Scan(Roots? roots = null)
+    {
+        roots ??= Roots.Standard(home);
         var changed = false;
-        foreach (var (key, path) in ClaudeFiles())
+        foreach (var (key, path) in ClaudeFiles(roots.Claude))
             changed |= Ingest(key, path, "claude");
-        foreach (var (key, path) in CodexFiles())
+        foreach (var (key, path) in CodexFiles(roots.Codex))
             changed |= Ingest(key, path, "codex");
         return changed;
     }
 
-    IEnumerable<(string, string)> ClaudeFiles()
+    /// <summary>Ordner mit demselben echten Pfad (Junction/Symlink zwischen zwei Konten) nur einmal.</summary>
+    public static List<string> Unique(IEnumerable<string> roots)
     {
-        var root = Path.Combine(home, ".claude", "projects");
-        return JsonlFiles(root).Select(path => ("claude:" + path[root.Length..].Replace('\\', '/'), path));
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<string>();
+        foreach (var root in roots)
+        {
+            var full = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            try
+            {
+                if (new DirectoryInfo(full).ResolveLinkTarget(returnFinalTarget: true) is { } target)
+                    full = Path.GetFullPath(target.FullName).TrimEnd(Path.DirectorySeparatorChar);
+            }
+            catch (IOException) { }
+            if (seen.Add(full)) result.Add(full);
+        }
+        return result;
     }
+
+    /// <summary>
+    /// Schlüssel relativ zum Ordner: Dieselbe Datei unter zwei Konten zählt nur einmal, und der
+    /// Lesestand des Standardkontos bleibt gültig.
+    /// </summary>
+    IEnumerable<(string, string)> ClaudeFiles(IEnumerable<string> roots) =>
+        Unique(roots).SelectMany(root =>
+            JsonlFiles(root).Select(path => ("claude:" + path[root.Length..].Replace('\\', '/'), path)));
 
     /// <summary>
     /// Schlüssel ist der Dateiname: Codex verschiebt fertige Sessions nach
     /// <c>archived_sessions</c>, der Lesestand soll mitwandern.
     /// </summary>
-    IEnumerable<(string, string)> CodexFiles() =>
-        new[] { "sessions", "archived_sessions" }.SelectMany(folder =>
-            JsonlFiles(Path.Combine(home, ".codex", folder)).Select(path => ("codex:" + Path.GetFileName(path), path)));
+    IEnumerable<(string, string)> CodexFiles(IEnumerable<string> roots) =>
+        Unique(roots).SelectMany(root => new[] { "sessions", "archived_sessions" }.SelectMany(folder =>
+            JsonlFiles(Path.Combine(root, folder)).Select(path => ("codex:" + Path.GetFileName(path), path))));
 
     static IEnumerable<string> JsonlFiles(string root)
     {

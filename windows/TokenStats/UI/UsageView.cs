@@ -9,7 +9,7 @@ namespace TokenStats.UI;
 /// <summary>Seite „Verbrauch“: Tokens und API-Vergleichswert je Zeitraum (SPEC §3.5).</summary>
 sealed class UsageView(
     Palette p, ConsumptionStore consumption, string providerId, bool showMoney, int? subscription,
-    UsagePeriod period, Action<UsagePeriod> selectPeriod)
+    UsagePeriod period, Action<UsagePeriod> selectPeriod, int accountCount = 1)
 {
     public UIElement Build()
     {
@@ -86,7 +86,10 @@ sealed class UsageView(
 
     string Footnote(UsageSummary summary)
     {
-        var text = "Tokenzahlen aus den Session-Logs dieses Rechners – Nutzung auf anderen Geräten fehlt";
+        // Mehrere Konten: Die Logs nennen kein Konto, darum alle zusammen (SPEC §6).
+        var text = accountCount > 1
+            ? $"Tokenzahlen aus den Session-Logs aller {accountCount} Konten dieses Rechners zusammen – die Logs nennen kein Konto; Nutzung auf anderen Geräten fehlt"
+            : "Tokenzahlen aus den Session-Logs dieses Rechners – Nutzung auf anderen Geräten fehlt";
         if (!showMoney) return text + ".";
         var asOf = consumption.Prices.AsOf is { } date ? $" (Stand {date.ToString("MM/yyyy", Format.Culture)})" : "";
         text += $" × Listenpreis{asOf}, inkl. Cache-Tarife. Keine Abrechnungsdaten – nur, was derselbe Verbrauch über die API gekostet hätte.";

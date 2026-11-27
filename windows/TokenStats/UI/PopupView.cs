@@ -17,7 +17,6 @@ public enum PopupPage { Limits, Usage }
 public sealed class PopupView
 {
     public const double Width = 372;
-    const int MaxVisibleTabs = 4;
     /// <summary>Seitenrand aller Blöcke im Popup.</summary>
     const double Inset = 16;
 
@@ -60,10 +59,15 @@ public sealed class PopupView
     public FrameworkElement Build()
     {
         var p = Palette;
-        var providers = store.SortedProviders;
+        var all = store.SortedProviders;
+        // „Verbrauch“ gilt je Anbieter: dort ein Tab je Anbieter statt je Konto (SPEC §6).
+        var providers = page == PopupPage.Usage ? all.DistinctBy(provider => provider.Kind).ToList() : all;
         // Beim Öffnen ist der knappste Anbieter aktiv, die Tab-Reihenfolge bleibt fest.
         var activeId = selectedId ?? store.Tightest?.ProviderId;
-        var selected = providers.FirstOrDefault(provider => provider.Id == activeId) ?? providers.FirstOrDefault();
+        var active = all.FirstOrDefault(provider => provider.Id == activeId) ?? all.FirstOrDefault(provider => provider.Kind == activeId);
+        var selected = page == PopupPage.Usage
+            ? providers.FirstOrDefault(provider => provider.Kind == active?.Kind) ?? providers.FirstOrDefault()
+            : active ?? providers.FirstOrDefault();
 
         var root = new StackPanel { Width = Width };
         root.Children.Add(Header());
@@ -115,12 +119,17 @@ public sealed class PopupView
 
     // Tabs
 
+    const int MaxLabelLength = 12;
+
     UIElement TabBar(List<IUsageProvider> providers, string? selected)
     {
         var p = Palette;
         var row = Ui.Row(2);
         row.Margin = new Thickness(Inset - 10, 0, Inset - 10, 0);
-        foreach (var provider in providers.Take(MaxVisibleTabs))
+        var labels = providers.ToDictionary(provider => provider.Id,
+            provider => page == PopupPage.Usage ? null : Shorten(store.AccountLabel(provider)));
+        var visibleCount = VisibleTabCount(providers.Select(provider => (provider.DisplayName, labels[provider.Id])).ToList());
+        foreach (var provider in providers.Take(visibleCount))
         {
             var isActive = provider.Id == selected;
             var severity = store.State(provider.Id).Snapshot?.TightestWindow?.Severity;
@@ -130,25 +139,32 @@ public sealed class PopupView
                 Fill = severity is { } s ? p.SeverityBrush(s) : p.Secondary,
                 Opacity = severity is null ? 0.4 : 1,
             };
+            var content = Ui.Row(5, dot, Ui.Text(provider.DisplayName, 12, isActive ? p.Primary : p.Secondary, FontWeights.SemiBold));
+            if (labels[provider.Id] is { } label)
+            {
+                var labelText = Ui.Text(label, 11, p.Secondary);
+                labelText.VerticalAlignment = VerticalAlignment.Center;
+                Ui.Add(content, labelText, 4);
+            }
             var tab = new Border
             {
                 Padding = new Thickness(10, 7, 10, 7),
                 BorderThickness = new Thickness(0, 0, 0, 2),
                 BorderBrush = isActive ? p.Accent : Brushes.Transparent,
-                Child = Ui.Row(5, dot, Ui.Text(provider.DisplayName, 12, isActive ? p.Primary : p.Secondary, FontWeights.SemiBold)),
+                Child = content,
             };
             var id = provider.Id;
             Ui.Add(row, Ui.Clickable(tab, () => Update(() => selectedId = id)), 2);
         }
 
-        var overflow = providers.Skip(MaxVisibleTabs).ToList();
+        var overflow = providers.Skip(visibleCount).ToList();
         if (overflow.Count > 0)
         {
             var menu = new ContextMenu();
             foreach (var provider in overflow)
             {
                 var id = provider.Id;
-                var item = new MenuItem { Header = provider.DisplayName };
+                var item = new MenuItem { Header = labels[provider.Id] is { } label ? $"{provider.DisplayName} · {label}" : provider.DisplayName };
                 item.Click += (_, _) => Update(() => selectedId = id);
                 menu.Items.Add(item);
             }
@@ -242,6 +258,32 @@ public sealed class PopupView
         return Ui.Clickable(border, action, help);
     }
 
+    static string? Shorten(string? label) =>
+        label is { Length: > MaxLabelLength } ? label[..(MaxLabelLength - 1)] + "…" : label;
+
+    /// <summary>Wie viele Tabs in die Breite passen – gemessen statt fest, weil Konten-Tabs länger sind.</summary>
+    static int VisibleTabCount(List<(string Title, string? Label)> titles)
+    {
+        const double available = Width - 2 * (Inset - 10);
+        const double overflowWidth = 40;
+        static double Measure(string text, double size, FontWeight weight) =>
+            new FormattedText(text, Format.Culture, FlowDirection.LeftToRight,
+                new Typeface(Ui.Font, FontStyles.Normal, weight, FontStretches.Normal), size, Brushes.Black, 1.0).WidthIncludingTrailingWhitespace;
+        var widths = titles.Select(t =>
+            Math.Ceiling(Measure(t.Title, 12, FontWeights.SemiBold) + (t.Label is { } label ? 4 + Measure(label, 11, FontWeights.Normal) : 0))
+            + 5 + 5 + 20 + 2).ToList();
+        if (widths.Sum() <= available) return titles.Count;
+        double used = 0;
+        var count = 0;
+        foreach (var width in widths)
+        {
+            if (used + width + overflowWidth > available) break;
+            used += width;
+            count++;
+        }
+        return Math.Max(count, 1);
+    }
+
     // Seiten „Limits“ und „Verbrauch“
 
     UIElement ProviderPage(IUsageProvider provider)
@@ -251,8 +293,16 @@ public sealed class PopupView
         var column = Ui.Column(16);
         column.Margin = new Thickness(Inset, 16, Inset, 18);
 
-        var title = Ui.Row(8, Ui.Text(provider.DisplayName, 13, p.Primary, FontWeights.Bold));
-        if (state.Snapshot?.Account?.Plan is { } plan)
+        var accountCount = store.AccountsOfKind(provider.Kind).Count;
+        var title = Ui.Row(8, Ui.Text(page == PopupPage.Usage ? provider.DisplayName : store.Title(provider), 13, p.Primary, FontWeights.Bold));
+        if (page == PopupPage.Usage && accountCount > 1)
+        {
+            var countText = Ui.Text($"{accountCount} Konten", 11, p.Secondary);
+            countText.FontFamily = new FontFamily("Cascadia Mono, Consolas");
+            countText.VerticalAlignment = VerticalAlignment.Center;
+            Ui.Add(title, countText, 8);
+        }
+        else if (state.Snapshot?.Account?.Plan is { } plan)
         {
             var planText = Ui.Text(plan, 11, p.Secondary);
             planText.FontFamily = new FontFamily("Cascadia Mono, Consolas");
@@ -274,9 +324,13 @@ public sealed class PopupView
 
         if (page == PopupPage.Usage)
         {
-            var view = new UsageView(Palette, consumption, provider.Id, settings.ShowMoney,
-                                     SubscriptionPrice.Dollars(provider.Id, state.Snapshot?.Account?.Plan), period,
-                                     selectedPeriod => Update(() => period = selectedPeriod));
+            // Abo-Preis aller Konten zusammen – zwei Max-Abos sind 400 $, nicht 200 $.
+            var prices = store.AccountsOfKind(provider.Kind)
+                .Select(account => SubscriptionPrice.Dollars(provider.Kind, store.State(account.Id).Snapshot?.Account?.Plan))
+                .OfType<int>().ToList();
+            var view = new UsageView(Palette, consumption, provider.Kind, settings.ShowMoney,
+                                     prices.Count > 0 ? prices.Sum() : null, period,
+                                     selectedPeriod => Update(() => period = selectedPeriod), accountCount);
             Ui.Add(column, view.Build(), 16);
         }
         else

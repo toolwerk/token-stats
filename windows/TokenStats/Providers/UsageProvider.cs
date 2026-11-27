@@ -2,14 +2,69 @@ using TokenStats.Model;
 
 namespace TokenStats.Providers;
 
-/// <summary>Ein Anbieter = eine Datei, die dieses Interface erfüllt (SPEC §7).</summary>
+/// <summary>
+/// Ein Anbieter = eine Datei, die dieses Interface erfüllt (SPEC §7). Jede Instanz steht für ein
+/// Konto; ein Anbieter kann mehrere haben (SPEC §6 „Mehrere Konten je Anbieter“).
+/// </summary>
 public interface IUsageProvider
 {
+    /// <summary>Konto-ID: beim Standardkonto die Anbieter-ID (<c>claude</c>), sonst <c>claude@&lt;hash&gt;</c>.</summary>
     string Id { get; }
+    /// <summary>Anbieter-ID, für alle Konten eines Anbieters gleich.</summary>
+    string Kind => Id;
+    /// <summary>Name des Anbieters, ohne Konto.</summary>
     string DisplayName { get; }
+    /// <summary>Herkunft des Kontos, für Bezeichnung und Einstellungen.</summary>
+    AccountSource Source => new();
+    bool IsDefaultAccount => Id == Kind;
     /// <summary>Credential-Quelle vorhanden?</summary>
     bool IsInstalled();
     Task<ProviderSnapshot> FetchAsync();
+}
+
+public enum AccountOrigin { Standard, Detected, Manual }
+
+/// <summary>Woher ein Konto kommt – nur Ordner und Kontodaten, keine Zugangsdaten.</summary>
+public sealed record AccountSource
+{
+    /// <summary>Konfigurationsordner (<c>~\.claude-2</c>); <c>null</c> beim Standardkonto und bei fester Quelle.</summary>
+    public string? Folder { get; init; }
+    public AccountOrigin Origin { get; init; } = AccountOrigin.Standard;
+    /// <summary>Kontokennung des Anbieters (<c>accountUuid</c>, ChatGPT-<c>account_id</c>) – erkennt doppelte Anmeldungen.</summary>
+    public string? Identity { get; init; }
+    public string? Email { get; init; }
+    public string? Name { get; init; }
+
+    /// <summary>Kurzform für Hinweise: <c>~\.claude-2</c>.</summary>
+    public string? FolderDisplay
+    {
+        get
+        {
+            if (Folder is null) return null;
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            return Folder.StartsWith(home + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ? "~" + Folder[home.Length..] : Folder;
+        }
+    }
+
+    /// <summary>Automatische Bezeichnung: lokaler Teil der E-Mail, Anzeigename, Ordnername.</summary>
+    public string? AutomaticLabel
+    {
+        get
+        {
+            if (Email?.Split('@')[0] is { Length: > 0 } local) return local;
+            if (!string.IsNullOrEmpty(Name)) return Name;
+            if (Folder is null) return null;
+            var last = Path.GetFileName(Folder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            return last.StartsWith('.') ? last[1..] : last;
+        }
+    }
+}
+
+/// <summary>Stabile Kurzkennung eines Ordners: die ersten 8 Hex-Zeichen von SHA-256(Pfad) – wie auf dem Mac.</summary>
+public static class FolderHash
+{
+    public static string Of(string path) =>
+        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(path)))[..8];
 }
 
 public enum ProviderErrorKind

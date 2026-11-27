@@ -3,8 +3,10 @@
 
 Limits come from api.anthropic.com/api/oauth/usage, token counts from ~/.claude/projects/**/*.jsonl,
 prices from Sources/TokenStats/Resources/pricing.json of this repo (list prices = API comparison value).
+Several accounts (SPEC §6 „Mehrere Konten je Anbieter“): every CLAUDE_CONFIG_DIR is an account of its own, see
+discover_accounts(); limits per account, usage over the logs of all accounts.
 """
-import json, os, sys, glob, re, subprocess, threading, time, urllib.request, urllib.error
+import hashlib, json, os, sys, glob, re, subprocess, threading, time, urllib.request, urllib.error
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -29,8 +31,7 @@ except (ValueError, ImportError):
 
 HOME = os.path.expanduser("~")
 HERE = os.path.dirname(os.path.abspath(__file__))
-CREDS = f"{HOME}/.claude/.credentials.json"
-PROJECTS = f"{HOME}/.claude/projects"
+CLAUDE_DIRS_ENV = "TOKENSTATS_CLAUDE_DIRS"
 ICON_DIR = f"{HOME}/.cache/tokenstats"
 INTERVAL_S = 300
 # Der Usage-Endpunkt ist hart rate-limitiert: höchstens eine Abfrage alle 300 s, auch bei Klick auf
@@ -67,8 +68,63 @@ button.ts-range:checked { color: #fff; font-weight: bold; }
 
 # ---------- data ----------
 
-def load_creds():
-    return json.load(open(CREDS))["claudeAiOauth"]
+def folder_hash(path):
+    """Wie Claude Code für den Schlüsselbund bei CLAUDE_CONFIG_DIR: erste 8 Hex-Zeichen von SHA-256(Pfad)."""
+    return hashlib.sha256(path.encode()).hexdigest()[:8]
+
+
+def short_path(path):
+    return "~" + path[len(HOME):] if path.startswith(HOME + "/") else path
+
+
+def read_account(path):
+    try:
+        account = json.load(open(path)).get("oauthAccount")
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return account if isinstance(account, dict) else {}
+
+
+def discover_accounts():
+    """-> [{id, folder, dir, label}]: Standardkonto ~/.claude, dann ~/.claude-*/~/.claude_* mit .claude.json,
+    CLAUDE_CONFIG_DIR und TOKENSTATS_CLAUDE_DIRS. Derselbe Ordner und dieselbe Anmeldung (accountUuid) nur einmal."""
+    try:
+        names = sorted(n for n in os.listdir(HOME) if n.startswith((".claude-", ".claude_")))
+    except OSError:
+        names = []
+    folders = [None] + [f"{HOME}/{n}" for n in names
+                        if os.path.isdir(f"{HOME}/{n}") and os.path.isfile(f"{HOME}/{n}/.claude.json")]
+    for extra in [os.environ.get("CLAUDE_CONFIG_DIR", "")] + os.environ.get(CLAUDE_DIRS_ENV, "").split(":"):
+        if extra:
+            folders.append(os.path.abspath(os.path.expanduser(extra)).rstrip("/"))
+    accounts, real_seen, uuid_seen = [], set(), set()
+    for folder in folders:
+        path = folder or f"{HOME}/.claude"
+        real = os.path.realpath(path)
+        if real in real_seen or (folder and not os.path.isdir(path)):
+            continue
+        real_seen.add(real)
+        account = read_account(f"{folder}/.claude.json" if folder else f"{HOME}/.claude.json")
+        uuid = account.get("accountUuid")
+        if uuid in uuid_seen:
+            continue   # zweimal dieselbe Anmeldung: sonst doppelte Abfragen gegen dasselbe Rate-Limit
+        if uuid:
+            uuid_seen.add(uuid)
+        email, name = account.get("emailAddress") or "", account.get("displayName") or ""
+        label = email.split("@")[0] or name or (os.path.basename(folder).lstrip(".") if folder else "Standard")
+        accounts.append({"id": f"claude@{folder_hash(folder)}" if folder else "claude",
+                         "folder": folder, "dir": path, "label": label})
+    return accounts
+
+
+def claude_command(account, args=""):
+    """Befehl für Hinweise: beim zweiten Konto mit Ordner, ein schlichtes `claude` erneuert nur das Standardkonto."""
+    prefix = f"CLAUDE_CONFIG_DIR={short_path(account['folder'])} " if account["folder"] else ""
+    return f"`{prefix}claude{args}`"
+
+
+def load_creds(account):
+    return json.load(open(f"{account['dir']}/.credentials.json"))["claudeAiOauth"]
 
 
 def plan_label(c):
@@ -105,14 +161,18 @@ def fetch_limits(c):
 
 
 def read_cache():
+    """-> {"accounts": {id: {info, attemptedAt, retryAt, error}}}"""
     try:
         d = json.load(open(LIMITS_CACHE))
     except (OSError, ValueError):
-        return {}
+        return {"accounts": {}}
     if not isinstance(d, dict):
-        return {}
-    # ältere Fassung: nur der Stand (mit „limits“), ohne Zeitstempel
-    return {"info": d, "attemptedAt": 0} if "limits" in d else d
+        return {"accounts": {}}
+    if isinstance(d.get("accounts"), dict):
+        return d
+    # ältere Fassungen ohne Konten: Stand des Standardkontos (ganz alt: nur der Stand, ohne Zeitstempel)
+    old = {"info": d, "attemptedAt": 0} if "limits" in d else d
+    return {"accounts": {"claude": old} if old else {}}
 
 
 def write_cache(cache):
@@ -126,45 +186,60 @@ def write_cache(cache):
         pass
 
 
-def limits_with_cache():
+def hhmm(ts):
+    return datetime.fromtimestamp(ts).strftime("%H:%M")
+
+
+def limits_with_cache(account):
     with _LIMITS_LOCK:   # zwei schnelle Klicks fragen nicht doppelt ab
-        return _limits_with_cache()
+        return _limits_with_cache(account)
 
 
-def _limits_with_cache():
-    """-> (Stand, Fehlertext). Fragt nur ab, wenn die letzte Abfrage lang genug her ist."""
-    now = time.time()
-    cache = read_cache()
-    info = cache.get("info")
-    retry_at = cache.get("retryAt", 0)
-    if now < retry_at:
-        return info, f"Abfrage pausiert (Rate-Limit) · wieder ab {datetime.fromtimestamp(retry_at):%H:%M}"
-    if now - cache.get("attemptedAt", 0) < MIN_INTERVAL_S:
-        return info, cache.get("error")
-    try:
-        creds = load_creds()
-    except (OSError, ValueError, KeyError):
-        # keine Anfrage an den Endpunkt, also auch keine Drosselung
-        return info, "Nicht angemeldet: `claude` starten"
-    # Versuch vor der Anfrage festhalten, damit parallele Aufrufe (Plasma, GTK) nicht zugleich abfragen
-    cache.update({"attemptedAt": now, "retryAt": 0, "error": None})
+def save_entry(account, entry):
+    cache = read_cache()   # frisch lesen: Plasma und GTK schreiben dieselbe Datei
+    cache["accounts"][account["id"]] = entry
     write_cache(cache)
+
+
+def _limits_with_cache(account):
+    """-> (Stand, Fehlertext) eines Kontos. Fragt nur ab, wenn dessen letzte Abfrage lang genug her ist."""
+    now = time.time()
+    entry = read_cache()["accounts"].get(account["id"]) or {}
+    info = entry.get("info")
+    retry_at = entry.get("retryAt", 0)
+    if now < retry_at:
+        return info, f"Abfrage pausiert (Rate-Limit) · wieder ab {hhmm(retry_at)}"
+    if now - entry.get("attemptedAt", 0) < MIN_INTERVAL_S:
+        return info, entry.get("error")
     try:
-        cache["info"] = fetch_limits(creds)
+        creds = load_creds(account)
+    except (OSError, ValueError, KeyError, TypeError):
+        # keine Anfrage an den Endpunkt, also auch keine Drosselung
+        return info, f"Nicht angemeldet: {claude_command(account)} starten"
+    if not creds.get("accessToken"):
+        return info, f"Nicht angemeldet: {claude_command(account, ' auth login')} ausführen"
+    if (creds.get("expiresAt") or now * 1000) / 1000 < now:
+        # Ablaufzeit lokal geprüft: keine Anfrage, also zählt der Versuch nicht gegen das Intervall
+        return info, f"Anmeldung abgelaufen: {claude_command(account)} starten"
+    # Versuch vor der Anfrage festhalten, damit parallele Aufrufe (Plasma, GTK) nicht zugleich abfragen
+    entry.update({"attemptedAt": now, "retryAt": 0, "error": None})
+    save_entry(account, entry)
+    try:
+        entry["info"] = fetch_limits(creds)
     except urllib.error.HTTPError as e:
         if e.code == 429:
             try:
                 wait = int(e.headers.get("Retry-After", ""))
             except ValueError:
                 wait = 0
-            cache["retryAt"] = now + min(max(wait, MIN_INTERVAL_S), 86400)
-            cache["error"] = f"Abfrage pausiert (Rate-Limit) · wieder ab {datetime.fromtimestamp(cache['retryAt']):%H:%M}"
+            entry["retryAt"] = now + min(max(wait, MIN_INTERVAL_S), 86400)
+            entry["error"] = f"Abfrage pausiert (Rate-Limit) · wieder ab {hhmm(entry['retryAt'])}"
         else:
-            cache["error"] = "Anmeldung abgelaufen: `claude` starten" if e.code == 401 else f"HTTP {e.code}"
+            entry["error"] = f"Anmeldung abgelaufen: {claude_command(account)} starten" if e.code == 401 else f"HTTP {e.code}"
     except Exception as e:
-        cache["error"] = f"Offline ({type(e).__name__})"
-    write_cache(cache)
-    return cache.get("info"), cache["error"]
+        entry["error"] = f"Offline ({type(e).__name__})"
+    save_entry(account, entry)
+    return entry.get("info"), entry["error"]
 
 
 def load_prices():
@@ -222,13 +297,26 @@ def _scan(path):
     return msgs
 
 
-def collect_usage(days=31):
+def log_files(accounts):
+    """JSONL-Dateien aller Konten; ein per Symlink geteilter projects-Ordner und dieselbe Datei nur einmal."""
+    roots, files = set(), {}
+    for account in accounts:
+        root = os.path.realpath(f"{account['dir']}/projects")
+        if root in roots:
+            continue
+        roots.add(root)
+        for path in glob.glob(f"{root}/**/*.jsonl", recursive=True):
+            files.setdefault(os.path.realpath(path), path)
+    return list(files.values())
+
+
+def collect_usage(accounts, days=31):
     """-> {day: {model: [in, out, cache_read, cw5m, cw1h]}}"""
     today = datetime.now().astimezone().date()
     since = today - timedelta(days=days - 1)
     out = defaultdict(lambda: defaultdict(lambda: [0, 0, 0, 0, 0]))
     seen = set()
-    for path in glob.glob(f"{PROJECTS}/**/*.jsonl", recursive=True):
+    for path in log_files(accounts):
         st = os.stat(path)
         if datetime.fromtimestamp(st.st_mtime).date() < since:
             continue
@@ -397,10 +485,9 @@ class Popup(Gtk.Window):
         head.pack_end(seg, False, False, 0)
         outer.pack_start(head, False, False, 0)
 
-        tabs = Gtk.Box(margin_left=10)
-        t = Gtk.ToggleButton(label="● Claude"); t.set_active(True); t.get_style_context().add_class("ts-tab")
-        tabs.pack_start(t, False, False, 0)
-        outer.pack_start(tabs, False, False, 0)
+        # ein Tab je Konto; auf „Verbrauch“ einer für Claude, weil die Logs kein Konto nennen
+        self.tabs = Gtk.Box(margin_left=10)
+        outer.pack_start(self.tabs, False, False, 0)
         outer.pack_start(Gtk.Separator(), False, False, 0)
 
         self.body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, margin=16, spacing=14)
@@ -456,23 +543,50 @@ class Popup(Gtk.Window):
             self.range = key
             self.render()
 
+    def on_tab(self, btn, index):
+        if not btn.get_active():
+            btn.set_active(True)   # nur ein Klick auf den aktiven Tab schaltet ab; der bleibt aktiv
+            return
+        if self.page == "limits" and self.app.current != index:
+            self.app.current = index
+            self.render()
+
+    def render_tabs(self):
+        for c in self.tabs.get_children():
+            c.destroy()
+        accounts = self.app.accounts
+        titles = [a["title"] for a in accounts] if self.page == "limits" and len(accounts) > 1 else ["Claude"]
+        for index, title in enumerate(titles):
+            t = Gtk.ToggleButton(label=f"● {title}"); t.get_style_context().add_class("ts-tab")
+            t.set_active(len(titles) == 1 or index == self.app.current)
+            t.connect("toggled", self.on_tab, index)
+            self.tabs.pack_start(t, False, False, 0)
+        self.tabs.show_all()
+
     def render(self):
         for c in self.body.get_children():
             c.destroy()
         a = self.app
-        note = f"  ·  ⚠ {a.note}" if a.note else ""
+        self.render_tabs()
+        account = a.account()
+        warning = (account or {}).get("note") if self.page == "limits" else a.note
+        note = f"  ·  ⚠ {warning}" if warning else ""
         self.status.set_text((f"Stand {a.updated:%H:%M}" if a.updated else "lädt …") + note)
         (self.render_limits if self.page == "limits" else self.render_usage)()
         self.body.show_all()
 
     def render_limits(self):
-        info = self.app.info
+        account = self.app.account()
+        info = account and account["info"]
         if not info:
-            self.body.pack_start(label("Lädt …", "ts-dim"), False, False, 0)
+            text = account["note"] if account and account["note"] else "Lädt …"
+            if account and len(self.app.accounts) > 1:
+                self.body.pack_start(label(account["title"], "ts-h"), False, False, 0)
+            self.body.pack_start(label(text, "ts-dim", wrap=True), False, False, 0)
             return
         worst = max((r["pct"] for r in info["limits"]), default=0)
         h = Gtk.Box(spacing=8)
-        h.pack_start(label("Claude", "ts-h"), False, False, 0)
+        h.pack_start(label(account["title"], "ts-h"), False, False, 0)
         h.pack_start(label(info["plan"], "ts-dim ts-mono"), False, False, 0)
         pill = markup(label(f"{worst:.0f} %", "ts-pill"), hexc(color_for(worst)))
         h.pack_end(pill, False, False, 0)
@@ -515,10 +629,13 @@ class Popup(Gtk.Window):
     def render_usage(self):
         usage = self.app.usage
         today = datetime.now().astimezone().date()
-        info = self.app.info
+        accounts = self.app.accounts
+        info = accounts[0]["info"] if accounts else None
         h = Gtk.Box(spacing=8)
         h.pack_start(label("Claude", "ts-h"), False, False, 0)
-        if info:
+        if len(accounts) > 1:
+            h.pack_start(label(f"{len(accounts)} Konten", "ts-dim ts-mono"), False, False, 0)
+        elif info:
             h.pack_start(label(info["plan"], "ts-dim ts-mono"), False, False, 0)
         self.body.pack_start(h, False, False, 0)
 
@@ -580,7 +697,10 @@ class Popup(Gtk.Window):
         tot.pack_end(label(f"{total_val:,.2f} $", "ts-h"), False, False, 0)
         self.body.pack_start(tot, False, False, 0)
         asof = f" (Stand {PRICES_AS_OF})" if PRICES_AS_OF else ""
-        foot = ("Lokal gezählte Tokens aus den Sitzungsprotokollen × Listenpreis" + asof + ", inkl. Cache-Tarife. "
+        source = (f"aller {len(accounts)} Konten zusammen (die Protokolle nennen kein Konto)"
+                  if len(accounts) > 1 else "")
+        foot = ("Lokal gezählte Tokens aus den Sitzungsprotokollen " + (source + " " if source else "")
+                + "× Listenpreis" + asof + ", inkl. Cache-Tarife. "
                 "Keine Abrechnungsdaten – nur, was derselbe Verbrauch über die API gekostet hätte."
                 + (" Modelle ohne Listenpreis sind nicht eingerechnet." if unpriced else ""))
         self.body.pack_start(label(foot, "ts-dim", wrap=True), False, False, 0)
@@ -683,7 +803,8 @@ class App:
         prov = Gtk.CssProvider(); prov.load_from_data(CSS)
         Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov,
                                                  Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        self.info, self.usage, self.note, self.updated = None, {}, "", None
+        # accounts: [{id, label, title, info, note}], current: Index des aktiven Tabs
+        self.accounts, self.current, self.usage, self.note, self.updated = [], 0, {}, "", None
         self.popup = Popup(self)
         self.tray = Tray(self.toggle)
         self.refresh()
@@ -700,18 +821,30 @@ class App:
         threading.Thread(target=self._work, daemon=True).start()
         return True
 
-    def _work(self):
-        info, note = limits_with_cache()
-        try:
-            usage = collect_usage()
-        except Exception:
-            usage = self.usage
-        GLib.idle_add(self._apply, info, usage, note)
+    def account(self):
+        return self.accounts[min(self.current, len(self.accounts) - 1)] if self.accounts else None
 
-    def _apply(self, info, usage, note):
-        self.info, self.usage, self.note = info, usage, note
+    def _work(self):
+        found = discover_accounts()
+        accounts = []
+        for account in found:
+            info, note = limits_with_cache(account)
+            title = f"Claude · {account['label']}" if len(found) > 1 else "Claude"
+            accounts.append({"id": account["id"], "label": account["label"], "title": title, "info": info, "note": note})
+        note = ""
+        try:
+            usage = collect_usage(found)
+        except Exception as e:
+            usage, note = self.usage, f"Verbrauch: {type(e).__name__}"
+        GLib.idle_add(self._apply, accounts, usage, note)
+
+    def _apply(self, accounts, usage, note):
+        # aktiven Tab über die Konto-ID halten, falls ein Konto dazukommt oder wegfällt
+        active = self.account()["id"] if self.account() else None
+        self.accounts, self.usage, self.note = accounts, usage, note
+        self.current = next((i for i, a in enumerate(accounts) if a["id"] == active), 0)
         self.updated = datetime.now()
-        worst = max((r["pct"] for r in info["limits"]), default=0) if info else 0
+        worst = max((r["pct"] for a in accounts if a["info"] for r in a["info"]["limits"]), default=0)
         self.tray.set_percent(worst)
         if self.popup.get_visible():
             self.popup.render()

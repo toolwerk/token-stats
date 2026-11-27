@@ -2,7 +2,7 @@
 
 Two variants with the same data sources, calculation and price table
 ([`Sources/TokenStats/Resources/pricing.json`](../Sources/TokenStats/Resources/pricing.json)).
-Claude Code only for now.
+Claude Code only for now, with any number of Claude accounts (see the variant READMEs).
 
 | Desktop | Use | Status |
 |---|---|---|

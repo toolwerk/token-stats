@@ -2,11 +2,12 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using TokenStats.Model;
+using TokenStats.Providers;
 using TokenStats.Usage;
 
 namespace TokenStats.UI;
 
-/// <summary>Einstellungsfenster, Abschnitte „Anzeige“, „Verbrauch“, „Aktualisierung“ und „Info“ (SPEC §4).</summary>
+/// <summary>Einstellungsfenster, Abschnitte „Anzeige“, „Konten“, „Verbrauch“, „Aktualisierung“ und „Info“ (SPEC §4).</summary>
 public sealed class SettingsWindow : Window
 {
     static readonly double[] Intervals = [300, 600, 900, 1800, 3600];
@@ -43,9 +44,9 @@ public sealed class SettingsWindow : Window
 
         var windowChoice = new ComboBox { MinWidth = 220 };
         windowChoice.Items.Add(new ComboBoxItem { Content = "Knappstes Limit", Tag = null });
-        foreach (var provider in store.Providers)
+        foreach (var provider in store.SortedProviders)
             foreach (var window in store.State(provider.Id).Snapshot?.Windows ?? [])
-                windowChoice.Items.Add(new ComboBoxItem { Content = $"{provider.DisplayName} · {window.Name}", Tag = $"{provider.Id}/{window.Id}" });
+                windowChoice.Items.Add(new ComboBoxItem { Content = $"{store.Title(provider)} · {window.Name}", Tag = $"{provider.Id}/{window.Id}" });
         windowChoice.SelectedItem = windowChoice.Items.Cast<ComboBoxItem>().FirstOrDefault(item => (string?)item.Tag == settings.FixedWindow)
                                     ?? windowChoice.Items[0];
         windowChoice.SelectionChanged += (_, _) => settings.FixedWindow = (string?)((ComboBoxItem)windowChoice.SelectedItem).Tag;
@@ -54,6 +55,8 @@ public sealed class SettingsWindow : Window
         Check(root, "Zustandsfarbe im Icon verwenden", settings.UseStateColor, value => settings.UseStateColor = value);
         Check(root, "API-Vergleichswert in Geld anzeigen", settings.ShowMoney, value => settings.ShowMoney = value);
         Check(root, "Bei Anmeldung starten", settings.LaunchAtLogin, value => settings.LaunchAtLogin = value);
+
+        Accounts(root);
 
         Section(root, "Verbrauch");
         var billing = new ComboBox { MinWidth = 90 };
@@ -80,6 +83,101 @@ public sealed class SettingsWindow : Window
         Note(root, "Automatische Updates gibt es bisher nur in der macOS-Version. Neue Versionen: github.com/mahype/token-stats/releases");
 
         return root;
+    }
+
+    /// <summary>
+    /// Abschnitt „Konten“ (SPEC §6 „Mehrere Konten je Anbieter“): erkannte Konten mit Schalter und
+    /// Bezeichnung, dazu Ordner von Hand hinzufügen. Jede Änderung sucht die Konten neu.
+    /// </summary>
+    void Accounts(StackPanel root)
+    {
+        Section(root, "Konten");
+        var list = new StackPanel();
+        root.Children.Add(list);
+
+        void Changed()
+        {
+            store.ReloadAccounts();
+            store.Refresh(manual: false);
+            consumption.Refresh();
+            Fill();
+        }
+
+        void Fill()
+        {
+            list.Children.Clear();
+            foreach (var provider in store.Providers.Where(p => p.IsInstalled()))
+            {
+                var grid = new Grid { Margin = new Thickness(0, 6, 0, 0) };
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                grid.ColumnDefinitions.Add(new ColumnDefinition());
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var id = provider.Id;
+                var show = new CheckBox { IsChecked = !settings.IsHidden(id), VerticalAlignment = VerticalAlignment.Center, ToolTip = "Anzeigen" };
+                show.Click += (_, _) =>
+                {
+                    settings.SetHidden(id, show.IsChecked != true);
+                    Changed();
+                };
+                grid.Children.Add(show);
+
+                var email = provider.Source.Email ?? store.State(id).Snapshot?.Account?.Name;
+                var origin = provider.Source.FolderDisplay ?? (provider.IsDefaultAccount ? "Standard" : null);
+                var text = new StackPanel { Margin = new Thickness(6, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
+                text.Children.Add(new TextBlock { Text = provider.DisplayName + (email is null ? "" : $" · {email}"), TextTrimming = TextTrimming.CharacterEllipsis });
+                if (origin is not null)
+                    text.Children.Add(new TextBlock { Text = origin, FontSize = 12, Opacity = 0.7, TextTrimming = TextTrimming.CharacterEllipsis });
+                Grid.SetColumn(text, 1);
+                grid.Children.Add(text);
+
+                var label = new TextBox
+                {
+                    Text = settings.AccountLabels.GetValueOrDefault(id) ?? "",
+                    ToolTip = $"Bezeichnung (automatisch: {provider.Source.AutomaticLabel ?? "–"})",
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                label.LostFocus += (_, _) => settings.SetAccountLabel(id, label.Text);
+                Grid.SetColumn(label, 2);
+                grid.Children.Add(label);
+
+                if (provider.Source is { Origin: AccountOrigin.Manual, Folder: { } folder })
+                {
+                    var kind = provider.Kind;
+                    var remove = new Button { Content = "Entfernen", Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+                    remove.Click += (_, _) =>
+                    {
+                        settings.RemoveAccountFolder(kind, folder);
+                        Changed();
+                    };
+                    Grid.SetColumn(remove, 3);
+                    grid.Children.Add(remove);
+                }
+                list.Children.Add(grid);
+            }
+        }
+        Fill();
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 8, 0, 0) };
+        foreach (var kind in AccountDiscovery.FolderKind.All)
+        {
+            var button = new Button { Content = $"{kind.DisplayName}-Ordner hinzufügen …", Margin = new Thickness(6, 0, 0, 0), Padding = new Thickness(8, 2, 8, 2) };
+            button.Click += (_, _) =>
+            {
+                var dialog = new Microsoft.Win32.OpenFolderDialog
+                {
+                    Title = $"Ordner, den {kind.Variable} für das weitere Konto nennt",
+                    InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                };
+                if (dialog.ShowDialog(this) != true) return;
+                settings.AddAccountFolder(kind.Id, dialog.FolderName);
+                Changed();
+            };
+            buttons.Children.Add(button);
+        }
+        root.Children.Add(buttons);
+        Note(root, "Weitere Konten legt die CLI mit eigenem Ordner an: CLAUDE_CONFIG_DIR bzw. CODEX_HOME. Ordner wie %USERPROFILE%\\.claude-2 werden automatisch gefunden. Ausgeblendete Konten werden nicht abgefragt.");
     }
 
     static string Version =>
