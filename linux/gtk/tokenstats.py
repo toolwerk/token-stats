@@ -91,14 +91,28 @@ def text_parts(text):
     return parts
 
 
-# Zeichen, nach denen ein Befehl umbrechen darf, wenn kein Leerzeichen passt (das Zeichen bleibt am Zeilenende)
-COMMAND_BREAK_AFTER = "/=_-.:"
+# Zeichen, nach denen ein Befehl umbrechen darf, wenn kein Leerzeichen passt, in dieser Rangfolge (das Zeichen
+# bleibt am Zeilenende). So wandert ein Pfadstück ganz in die nächste Zeile, wenn es dort passt.
+COMMAND_BREAK_RANKS = ("=", "/", "-_.:")
+
+
+def _command_break(text, limit):
+    """Länge der Zeile bei einem Bruch nach einem Zeichen aus COMMAND_BREAK_RANKS (der höchste Rang gewinnt,
+    darin der letzte passende), sonst limit (harter Bruch). Ein „.“, mit dem ein Ordnername beginnt (am
+    Tokenanfang oder direkt nach „/“, „=“, „~“), ist kein Bruchpunkt."""
+    for chars in COMMAND_BREAK_RANKS:
+        for i in range(min(limit, len(text)) - 1, -1, -1):
+            c = text[i]
+            if c in chars and not (c == "." and (i == 0 or text[i - 1] in "/=~ ")):
+                return i + 1
+    return limit
 
 
 def wrap_command(command, max_chars, indent=2):
     """Monospace-Befehl -> Zeilen mit höchstens max_chars Zeichen, Folgezeilen um indent Leerzeichen eingerückt
-    (die Einrückung zählt mit). Bruch am letzten passenden Leerzeichen, sonst nach dem letzten / = _ - . :,
-    sonst hart nach max_chars Zeichen; führende Leerzeichen einer Folgezeile entfallen. Nichts geht verloren."""
+    (die Einrückung zählt mit). Bruch am letzten passenden Leerzeichen, sonst nach dem letzten „=“, sonst nach
+    dem letzten „/“, sonst nach „- _ . :“ (siehe _command_break), sonst hart nach max_chars Zeichen; führende
+    Leerzeichen einer Folgezeile entfallen. Nichts geht verloren."""
     text = " ".join(str(command).split())
     max_chars = max(1, int(max_chars))
     indent = max(0, min(indent, max_chars - 1))
@@ -112,8 +126,7 @@ def wrap_command(command, max_chars, indent=2):
             if cut > 0:
                 line, text = text[:cut], text[cut + 1:]
             else:
-                cut = max(text.rfind(c, 0, limit) for c in COMMAND_BREAK_AFTER)
-                cut = cut + 1 if cut >= 0 else limit
+                cut = _command_break(text, limit)
                 line, text = text[:cut], text[cut:]
         lines.append(line if first else " " * indent + line)
         text, first = text.lstrip(" "), False

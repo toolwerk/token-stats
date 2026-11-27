@@ -50,9 +50,22 @@ function aggregate(usage, n, locale) {
 }
 
 // Monospace-Befehl -> Zeilen mit höchstens maxChars Zeichen, Folgezeilen um indent Leerzeichen eingerückt
-// (zählt mit). Bruch am letzten passenden Leerzeichen, sonst nach dem letzten / = _ - . :, sonst hart.
-// Dieselbe Regel wie wrap_command in backend.py und gtk/tokenstats.py (linux/tests prüft beide gleich).
-var COMMAND_BREAK_AFTER = "/=_-.:"
+// (zählt mit). Bruch am letzten passenden Leerzeichen, sonst nach dem letzten „=“, sonst nach dem letzten „/“,
+// sonst nach „- _ . :“, sonst hart. Ein „.“, mit dem ein Ordnername beginnt (am Tokenanfang oder direkt nach
+// „/“, „=“, „~“), ist kein Bruchpunkt. Dieselbe Regel wie wrap_command in backend.py und gtk/tokenstats.py
+// (linux/tests prüft beide gleich).
+var COMMAND_BREAK_RANKS = ["=", "/", "-_.:"]
+
+function commandBreak(text, limit) {
+    for (var r = 0; r < COMMAND_BREAK_RANKS.length; r++) {
+        for (var i = Math.min(limit, text.length) - 1; i >= 0; i--) {
+            var c = text[i]
+            if (COMMAND_BREAK_RANKS[r].indexOf(c) >= 0 && !(c === "." && (i === 0 || "/=~ ".indexOf(text[i - 1]) >= 0)))
+                return i + 1
+        }
+    }
+    return limit
+}
 
 function wrapCommand(command, maxChars, indent) {
     if (indent === undefined) indent = 2
@@ -71,10 +84,7 @@ function wrapCommand(command, maxChars, indent) {
             if (cut > 0) {
                 line = text.substring(0, cut); text = text.substring(cut + 1)
             } else {
-                cut = -1
-                for (var i = 0; i < COMMAND_BREAK_AFTER.length; i++)
-                    cut = Math.max(cut, text.lastIndexOf(COMMAND_BREAK_AFTER[i], limit - 1))
-                cut = cut >= 0 ? cut + 1 : limit
+                cut = commandBreak(text, limit)
                 line = text.substring(0, cut); text = text.substring(cut)
             }
         }

@@ -342,12 +342,28 @@ class WrapCommandTest(unittest.TestCase):
 
     def test_breaks_after_slash_and_equals(self):
         for module in self.each():
-            # kein Leerzeichen passt: nach dem letzten „/“ bzw. „=“ der Zeile, das Zeichen bleibt am Ende
+            # kein Leerzeichen passt: zuerst nach „=“, dann nach „/“, dann nach „- _ . :“; das Zeichen bleibt am Ende
             self.assertEqual(module.wrap_command("CLAUDE_CONFIG_DIR=~/konten/kunde-a", 28),
-                             ["CLAUDE_CONFIG_DIR=~/konten/", "  kunde-a"])
+                             ["CLAUDE_CONFIG_DIR=", "  ~/konten/kunde-a"])
             self.assertEqual(module.wrap_command("CLAUDE_CONFIG_DIR=~/x", 19), ["CLAUDE_CONFIG_DIR=", "  ~/x"])
             self.assertEqual(module.wrap_command("TOKENSTATS_CLAUDE_DIRS=/pfad/eins:/pfad/zwei", 30),
-                             ["TOKENSTATS_CLAUDE_DIRS=/pfad/", "  eins:/pfad/zwei"])
+                             ["TOKENSTATS_CLAUDE_DIRS=", "  /pfad/eins:/pfad/zwei"])
+            self.assertEqual(module.wrap_command("/pfad/eins:/pfad/zwei", 12), ["/pfad/eins:/", "  pfad/zwei"])
+            self.assertEqual(module.wrap_command("abc-defgh", 6), ["abc-", "  defg", "  h"])
+
+    def test_designer_example(self):
+        command = "CLAUDE_CONFIG_DIR=~/.claude-alt claude"
+        for module in self.each():
+            self.assertEqual(module.wrap_command(command, 29), ["CLAUDE_CONFIG_DIR=", "  ~/.claude-alt claude"])
+            self.assertEqual(module.wrap_command(command, 20), ["CLAUDE_CONFIG_DIR=", "  ~/.claude-alt", "  claude"])
+            for width in range(5, 45):   # nie direkt nach dem Punkt in „~/.claude“
+                self.assertFalse(any(line.endswith("/.") for line in module.wrap_command(command, width)), width)
+
+    def test_dot_starting_a_folder_is_no_break(self):
+        for module in self.each():
+            self.assertEqual(module.wrap_command("~.abcdef", 3), ["~.a", "  b", "  c", "  d", "  e", "  f"])
+            self.assertEqual(module.wrap_command(".abcdef", 3), [".ab", "  c", "  d", "  e", "  f"])
+            self.assertEqual(module.wrap_command("x.abcdef", 3), ["x.", "  a", "  b", "  c", "  d", "  e", "  f"])
 
     def test_hard_break_as_last_resort(self):
         for module in self.each():
@@ -371,8 +387,9 @@ class WrapCommandTest(unittest.TestCase):
     def test_util_js_matches(self):
         rng = random.Random(11)
         cases = [(self.KUNDE, w) for w in range(1, 45)]
-        cases += [("".join(rng.choice("ab1 /=_-.:") for _ in range(rng.randint(1, 60))), rng.randint(1, 30))
-                  for _ in range(200)]
+        cases += [("CLAUDE_CONFIG_DIR=~/.claude-alt claude", w) for w in range(1, 45)]
+        cases += [("".join(rng.choice("ab1 /=_-.:~") for _ in range(rng.randint(1, 60))), rng.randint(1, 30))
+                  for _ in range(400)]
         with open(os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "code", "util.js")) as f:
             js = f.read().replace(".pragma library", "")
         js += "\nconst cases = " + json.dumps(cases) + ";\n"

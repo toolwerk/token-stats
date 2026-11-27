@@ -35,9 +35,10 @@ Every `CLAUDE_CONFIG_DIR` is an account of its own (SPEC §6 "Mehrere Konten je 
   single account) and may wrap; nothing is shortened. Hints name the folder, e.g. "Nicht
   angemeldet:" followed by `CLAUDE_CONFIG_DIR=~/.claude-2 claude` and "starten". A command in a
   hint or in the empty state is shown on lines of its own in monospace and is never cut off: it
-  wraps at spaces first, a part wider than the line after one of `/ = _ - . :` (the character stays
-  at the line end), and only as a last resort after any character; continuation lines are indented
-  by two characters. The backend's `text_parts()` splits a hint into sentence parts and commands
+  wraps at the last space that fits; failing that after the last `=`, then `/`, then one of
+  `- _ . :` (the character stays at the line end, a `.` that starts a folder name such as `~/.claude`
+  is no break point), and only as a last resort after any character. A path piece therefore moves to
+  the next line whole when it fits there; continuation lines are indented by two characters. The backend's `text_parts()` splits a hint into sentence parts and commands
   (`»…«`), `wrap_command()` (and `wrapCommand()` in `util.js`) does the wrapping.
 - A folder from `TOKENSTATS_CLAUDE_DIRS` or `CLAUDE_CONFIG_DIR` that does not exist (an unmounted
   drive, say) stays in the account bar, grey with "!", and is never queried. Its page says
