@@ -498,7 +498,8 @@ private struct StatusLine: View {
     private func label(_ symbol: String, _ text: String, _ severity: Severity?) -> some View {
         Label { CommandText(text) } icon: { Image(systemName: symbol) }
             .font(.system(size: 11))
-            .foregroundStyle(severity.map { AnyShapeStyle($0.color) } ?? AnyShapeStyle(.secondary))
+            // Satz in der Textfarbe (≥ 4,5:1), wie der Einrichtungsfehler darüber und das Windows-Popup.
+            .foregroundStyle(severity.map { AnyShapeStyle($0.textColor) } ?? AnyShapeStyle(.secondary))
             .fixedSize(horizontal: false, vertical: true)
     }
 }
