@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using TokenStats.Model;
 
 namespace TokenStats.UI;
 
@@ -10,6 +11,7 @@ static class Ui
 {
     public static readonly FontFamily Font = new("Segoe UI Variable Text, Segoe UI");
     public static readonly FontFamily Icons = new("Segoe Fluent Icons, Segoe MDL2 Assets");
+    public static readonly FontFamily Mono = new("Cascadia Mono, Consolas");
 
     public static TextBlock Text(string text, double size, Brush brush, FontWeight? weight = null) => new()
     {
@@ -27,6 +29,65 @@ static class Ui
         block.TextWrapping = TextWrapping.Wrap;
         block.TextTrimming = TextTrimming.None;
         return block;
+    }
+
+    /// <summary>
+    /// Hinweis, der Befehle in »…« enthalten kann: Satzteile brechen normal um, jeder Befehl steht als
+    /// eigene Zeile in Monospace (ohne »…«) und bricht nur an Leerzeichen. <paramref name="brush"/> und
+    /// <paramref name="font"/> leer = vom Fenster erben (Einstellungen).
+    /// </summary>
+    public static StackPanel Prose(string text, double size, Brush? brush = null, FontFamily? font = null)
+    {
+        var panel = new StackPanel();
+        foreach (var part in CommandText.Split(text))
+        {
+            FrameworkElement element;
+            if (part.IsCommand)
+            {
+                element = Command(part.Text, size, brush);
+            }
+            else
+            {
+                var block = new TextBlock { Text = part.Text, FontSize = size, TextWrapping = TextWrapping.Wrap };
+                if (brush is not null) block.Foreground = brush;
+                if (font is not null) block.FontFamily = font;
+                element = block;
+            }
+            Add(panel, element, 3);
+        }
+        return panel;
+    }
+
+    /// <summary>Befehlszeile: ein Block je durch Leerzeichen getrenntem Teil, jeder ohne Umbruch; Rechtsklick kopiert.</summary>
+    public static WrapPanel Command(string command, double size, Brush? brush = null)
+    {
+        // Transparenter Hintergrund, damit der Rechtsklick auch zwischen den Teilen greift.
+        var line = new WrapPanel { Background = Brushes.Transparent };
+        foreach (var token in CommandText.Tokens(command))
+        {
+            var block = new TextBlock
+            {
+                Text = token,
+                FontFamily = Mono,
+                FontSize = size,
+                TextWrapping = TextWrapping.NoWrap,
+                TextTrimming = TextTrimming.None,
+                Margin = new Thickness(0, 0, Math.Round(size * 0.6), 0),
+            };
+            if (brush is not null) block.Foreground = brush;
+            line.Children.Add(block);
+        }
+        var copy = new MenuItem { Header = "Befehl kopieren" };
+        copy.Click += (_, _) =>
+        {
+            // Die Zwischenablage kann kurz von einem anderen Programm belegt sein.
+            try { Clipboard.SetText(command); }
+            catch (System.Runtime.InteropServices.ExternalException) { }
+        };
+        var menu = new ContextMenu();
+        menu.Items.Add(copy);
+        line.ContextMenu = menu;
+        return line;
     }
 
     public static TextBlock Icon(string glyph, double size, Brush brush) => new()

@@ -225,7 +225,7 @@ public sealed class PopupView
             var severity = faulty ? null : store.State(entry.Id).Snapshot?.TightestWindow?.Severity;
             var name = store.Label(entry.Provider) ?? entry.Provider.DisplayName;
             var text = Ui.Wrapped(faulty ? $"{name} !" : name, 11.5, faulty ? p.Secondary : isSelected ? p.Primary : p.Secondary);
-            text.FontWeight = isSelected ? FontWeights.SemiBold : FontWeights.Normal;
+            // Gleiche Schrift für alle Chips, sonst springt die Breite beim Wählen.
             text.VerticalAlignment = VerticalAlignment.Center;
             text.Margin = new Thickness(6, 0, 0, 0);
             var dot = Dot(severity);
@@ -446,7 +446,7 @@ public sealed class PopupView
         var icon = Ui.Icon("\uE7BA", 11, color);
         icon.VerticalAlignment = VerticalAlignment.Top;
         icon.Margin = new Thickness(0, 2, 0, 0);
-        var label = Ui.Wrapped(text, 11, color);
+        var label = Ui.Prose(text, 11, color, Ui.Font);
         label.Margin = new Thickness(6, 0, 0, 0);
         var hint = new Grid();
         hint.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -515,7 +515,7 @@ public sealed class PopupView
         var icon = Ui.Icon(glyph, 11, color);
         icon.VerticalAlignment = VerticalAlignment.Top;
         icon.Margin = new Thickness(0, 2, 0, 0);
-        var label = Ui.Wrapped(text, 11, color);
+        var label = Ui.Prose(text, 11, color, Ui.Font);
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });

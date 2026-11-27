@@ -104,9 +104,13 @@ public sealed class SettingsWindow : Window
         root.Children.Add(accountList);
         FillAccounts();
         // PowerShell-Form wie die übrigen Windows-Hinweise; $env:USERPROFILE wird in "…" aufgelöst.
-        Note(root, "Weitere Konten legst du mit eigenem Ordner an: »$env:CLAUDE_CONFIG_DIR=\"$env:USERPROFILE\\.claude-2\"; claude« bzw. "
+        // Die Befehle stehen als eigene Zeilen in Monospace (Ui.Prose).
+        var footnote = Ui.Prose("Weitere Konten legst du mit eigenem Ordner an: »$env:CLAUDE_CONFIG_DIR=\"$env:USERPROFILE\\.claude-2\"; claude« bzw. "
                    + "»$env:CODEX_HOME=\"$env:USERPROFILE\\.codex-2\"; codex«. Ordner wie %USERPROFILE%\\.claude-2 findet Token Stats selbst. "
-                   + "Ausgeblendete Konten werden nicht abgefragt.");
+                   + "Ausgeblendete Konten werden nicht abgefragt.", 12);
+        footnote.Opacity = 0.7;
+        footnote.Margin = new Thickness(0, 6, 0, 0);
+        root.Children.Add(footnote);
     }
 
     /// <summary>Jede Änderung an den Konten sucht sie neu, fragt fällige ab und liest den Verbrauch neu.</summary>
@@ -245,31 +249,47 @@ public sealed class SettingsWindow : Window
             text.Children.Add(Hint(kind.NotSignedInHint(entry.Source.Folder ?? ""), Severity.Warn));
         grid.Children.Add(text);
 
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(8, 0, 0, 0) };
-        if (!missing && !editing)
-        {
-            var pen = new Button
-            {
-                Content = new TextBlock { Text = "\uE70F", FontFamily = Ui.Icons, FontSize = 12 },
-                ToolTip = "Bezeichnung ändern",
-                MinWidth = 0,
-                Padding = new Thickness(8, 4, 8, 4),
-            };
-            pen.Click += (_, _) =>
-            {
-                editingId = id;
-                FillAccounts();
-            };
-            buttons.Children.Add(pen);
-        }
-        if (RemoveButton(kind, entry) is { } remove)
-        {
-            remove.Margin = new Thickness(buttons.Children.Count > 0 ? 6 : 0, 0, 0, 0);
-            buttons.Children.Add(remove);
-        }
+        var buttons = Buttons(RemoveButton(kind, entry), PenButton(id, visible: !missing && !editing));
         Grid.SetColumn(buttons, 1);
         grid.Children.Add(buttons);
         return grid;
+    }
+
+    /// <summary>
+    /// Knöpfe rechts in jeder Zeile gleich: zuerst „Entfernen“ (nur „von Hand“), ganz rechts der Stift.
+    /// Ein unsichtbarer Stift hält seinen Platz, damit „Entfernen“ überall an derselben Stelle sitzt.
+    /// </summary>
+    static StackPanel Buttons(Button? remove, Button pen)
+    {
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(8, 0, 0, 0) };
+        if (remove is not null)
+        {
+            remove.Margin = new Thickness(0, 0, 6, 0);
+            buttons.Children.Add(remove);
+        }
+        buttons.Children.Add(pen);
+        return buttons;
+    }
+
+    /// <summary>Stift „Bezeichnung ändern“; <paramref name="visible"/> = false hält nur den Platz frei.</summary>
+    Button PenButton(string id, bool visible)
+    {
+        var pen = new Button
+        {
+            Content = new TextBlock { Text = "\uE70F", FontFamily = Ui.Icons, FontSize = 12 },
+            ToolTip = "Bezeichnung ändern",
+            MinWidth = 0,
+            Padding = new Thickness(8, 4, 8, 4),
+            VerticalAlignment = VerticalAlignment.Top,
+            // Hidden statt Collapsed: unsichtbar, nicht bedienbar, aber mit Platz.
+            Visibility = visible ? Visibility.Visible : Visibility.Hidden,
+        };
+        pen.Click += (_, _) =>
+        {
+            editingId = id;
+            FillAccounts();
+        };
+        return pen;
     }
 
     /// <summary>
@@ -374,10 +394,10 @@ public sealed class SettingsWindow : Window
         grid.Children.Add(info);
         if (RemoveButton(kind, entry) is { } remove)
         {
-            remove.Margin = new Thickness(8, 0, 0, 0);
-            remove.VerticalAlignment = VerticalAlignment.Top;
-            Grid.SetColumn(remove, 1);
-            grid.Children.Add(remove);
+            // Gleiche Stelle wie in den Kontozeilen: Platz für den Stift bleibt frei.
+            var buttons = Buttons(remove, PenButton(entry.Id, visible: false));
+            Grid.SetColumn(buttons, 1);
+            grid.Children.Add(buttons);
         }
         return grid;
     }
@@ -487,7 +507,7 @@ public sealed class SettingsWindow : Window
             Margin = new Thickness(0, 2, 8, 0),
             VerticalAlignment = VerticalAlignment.Top,
         };
-        var label = new TextBlock { Text = text, FontSize = 12, TextWrapping = TextWrapping.Wrap };
+        var label = Ui.Prose(text, 12);
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });

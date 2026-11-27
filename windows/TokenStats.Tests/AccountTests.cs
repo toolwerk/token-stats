@@ -151,6 +151,29 @@ public sealed class AccountTests : IDisposable
     }
 
     [Fact]
+    public void SplitsHintsIntoSentencesAndCommands()
+    {
+        static CommandText.Part P(string text) => new(text, IsCommand: false);
+        static CommandText.Part C(string text) => new(text, IsCommand: true);
+
+        Assert.Equal([P("Keine Anmeldung in diesem Ordner. Im Terminal"), C("$env:CODEX_HOME=\"C:\\Daten\\codex-arbeit\"; codex login"), P("starten.")],
+                     CommandText.Split(AccountDiscovery.FolderKind.Codex.NotSignedInHint(@"C:\Daten\codex-arbeit")));
+        // Satzzeichen direkt hinter dem Befehl fallen mit den »…« weg.
+        Assert.Equal([P("Codex einmal starten oder"), C("codex login")], CommandText.Split("Codex einmal starten oder »codex login«."));
+        Assert.Equal([P("Weitere Konten:"), C("claude"), P("bzw."), C("codex"), P("Ordner findet Token Stats selbst.")],
+                     CommandText.Split("Weitere Konten: »claude« bzw. »codex«. Ordner findet Token Stats selbst."));
+        // Teil eines Wortes bleibt im Satz.
+        Assert.Equal([P("Stand der letzten »agy«-Sitzung. Aktualisiert sich, sobald"), C("agy"), P("läuft.")],
+                     CommandText.Split("Stand der letzten »agy«-Sitzung. Aktualisiert sich, sobald »agy« läuft."));
+        Assert.Equal([P("Abfragelimit erreicht.")], CommandText.Split("Abfragelimit erreicht."));
+        Assert.Empty(CommandText.Split(""));
+
+        // Umbruch nur an Leerzeichen, nie im Pfad.
+        Assert.Equal(new[] { "$env:CLAUDE_CONFIG_DIR=\"C:\\Daten\\claude-arbeit\";", "claude" },
+                     CommandText.Tokens(AccountDiscovery.FolderKind.Claude.LoginCommand(@"C:\Daten\claude-arbeit")));
+    }
+
+    [Fact]
     public void HiddenAccountsAreNeitherVisibleNorPolled()
     {
         var folder = ClaudeFolder(".claude-privat", "u-6", "privat@example.com");
