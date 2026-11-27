@@ -293,26 +293,33 @@ private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
-/// Kurzmeter (Entwurf „Widgets einheitlich“ §3): eine Zeile, 14 pt – Name, 4-pt-Balken mit
-/// Pace-Marke, Prozent in 38 pt. Letzte Stufe vor „nur Kopf“ im kleinen und mittleren Widget.
-struct ShortMeter: View {
-    let window: LimitWindow
+/// Kurzmeter (Entwurf „Widgets einheitlich“ §3): eine Zeile je Limit, 14 pt – Name, 4-pt-Balken
+/// mit 8-pt-Pace-Marke, Prozent in 38 pt. Als Raster, damit die Namen eine gemeinsame Spalte
+/// bilden und alle Balken gleich lang sind, gleich beginnen und gleich enden (Designer-Prüfung
+/// PR #5, Runde 12). Letzte Stufe vor „nur Kopf“ im kleinen und mittleren Widget.
+struct ShortMeters: View {
+    let windows: [LimitWindow]
     let now: Date
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text(window.name).font(.system(size: 11, weight: .semibold)).lineLimit(1).fixedSize()
-            MeterBar(percent: window.percent, elapsed: window.elapsedFraction(now: now), color: window.severity.color)
-                .frame(height: 4)
-            Text(Format.percent(window.percent))
-                .font(.system(size: 11, weight: .semibold))
-                .monospacedDigit()
-                .foregroundStyle(window.severity.color)
-                .lineLimit(1)
-                .fixedSize()
-                .frame(width: 38, alignment: .trailing)
+        Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 3) {
+            ForEach(windows) { window in
+                GridRow {
+                    Text(window.name).font(.system(size: 11, weight: .semibold)).lineLimit(1).fixedSize()
+                    MeterBar(percent: window.percent, elapsed: window.elapsedFraction(now: now),
+                             color: window.severity.color, markHeight: 8)
+                        .frame(height: 4)
+                    Text(Format.percent(window.percent))
+                        .font(.system(size: 11, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(window.severity.color)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .frame(width: 38, alignment: .trailing)
+                }
+                .frame(height: 14)
+            }
         }
-        .frame(height: 14)
     }
 }
 
@@ -699,9 +706,7 @@ public struct LimitsWidgetView: View {
             selection: size == .large ? nil : selectionDetail
         )
         if short {
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(windows) { ShortMeter(window: $0, now: now) }
-            }
+            ShortMeters(windows: windows, now: now)
         } else if columns == 1 {
             ForEach(windows) { MeterRow(window: $0, compact: compact, showScope: showScope, stackDetails: true, now: now) }
         } else {

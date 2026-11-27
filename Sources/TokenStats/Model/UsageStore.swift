@@ -134,10 +134,11 @@ final class UsageStore {
     }
 
     /// Hinweis in den Einstellungen bei fehlendem Ordner, je nach Zustand (Designer-Prüfung
-    /// PR #5, Runde 11). Gleiche Sätze wie `AccountEntry.MissingFolderHint` unter Windows.
+    /// PR #5, Runden 11 und 12). Gleiche Sätze wie `AccountEntry.MissingFolderHint` unter Windows.
     nonisolated static func missingFolderHint(hidden: Bool) -> String {
+        // Ausgeblendet steht schon darüber – „ausgeblendet“ nicht doppelt (Runde 12, c).
         hidden
-            ? "Ordner nicht gefunden. Das Konto ist ausgeblendet."
+            ? "Ordner nicht gefunden."
             : "Ordner nicht gefunden. Das Konto steht grau im Menü. Ist das Laufwerk eingehängt, wird es wieder abgefragt."
     }
 

@@ -442,7 +442,7 @@ private struct ProviderPage: View {
         if let problem {
             Label { CommandText(problem) } icon: { Image(systemName: "exclamationmark.triangle") }
                 .font(.system(size: 11))
-                .foregroundStyle(Severity.crit.color)
+                .foregroundStyle(Severity.crit.textColor)
                 .fixedSize(horizontal: false, vertical: true)
             Button("Einstellungen öffnen", action: openSettings)
         } else {

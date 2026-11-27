@@ -7,7 +7,7 @@ import UIKit
 
 /// Zustandsfarben aus dem Entwurf, je für Hell und Dunkel.
 extension Severity {
-    private var hexValues: (light: UInt32, dark: UInt32) {
+    var hexValues: (light: UInt32, dark: UInt32) {
         switch self {
         case .ok: (0x2F8F5B, 0x4CBE83)
         case .warn: (0xC1860F, 0xE0A838)
@@ -16,6 +16,23 @@ extension Severity {
     }
 
     public var color: Color { Color.dynamic(light: hexValues.light, dark: hexValues.dark) }
+
+    /// Farbe für **Hinweissätze** (Designer-Prüfung PR #5, Runde 12): mindestens 4,5:1 auf der
+    /// getönten Hinweisfläche (12 % der Zustandsfarbe), auch gemessen an den Pixeln der 10-pt-Schrift.
+    /// Mit `color` wären es nur Rot dunkel #E7705A auf #4E3D3B 3,3:1 (jetzt #F59A8A, 4,8:1),
+    /// Rot hell #C04329 auf #F3E7E4 4,3:1 (jetzt #952F1A, 6,4:1), Gelb hell #C1860F auf #F3EDE1
+    /// 2,2:1 (jetzt #744F00, 6,3:1), Gelb dunkel #E0A838 auf #4D4437 knapp unter 4,5:1 (jetzt
+    /// #E8B24A, 5,0:1). Hell liegen die Pixel der Kantenglättung wegen heller als der Sollwert,
+    /// darum dort mit Abstand. Balken, Prozente und Punkte bleiben bei `color`. Geprüft in `ContrastTests`.
+    public var textColor: Color { Color.dynamic(light: textHexValues.light, dark: textHexValues.dark) }
+
+    var textHexValues: (light: UInt32, dark: UInt32) {
+        switch self {
+        case .ok: hexValues
+        case .warn: (0x744F00, 0xE8B24A)
+        case .crit: (0x952F1A, 0xF59A8A)
+        }
+    }
 
     #if canImport(AppKit)
     public var nsColor: NSColor { .dynamic(light: hexValues.light, dark: hexValues.dark) }

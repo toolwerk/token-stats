@@ -249,6 +249,7 @@ private struct AccountsSection: View {
                                 .toggleStyle(.checkbox)
                                 .labelsHidden()
                                 .disabled(true)
+                                .accessibilityLabel(Text(store.label(for: provider) ?? provider.displayName))
                             Text(store.label(for: provider) ?? provider.displayName)
                                 .foregroundStyle(.primary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -282,10 +283,11 @@ private struct AccountsSection: View {
             .padding(.leading, 20)
             switch entry.status {
             case .missingFolder:
-                notice("exclamationmark.triangle", UsageStore.missingFolderHint(hidden: store.isHidden(provider.id)), Severity.crit.color)
+                notice("exclamationmark.triangle", UsageStore.missingFolderHint(hidden: store.isHidden(provider.id)),
+                       Severity.crit.textColor, tint: Severity.crit.color)
                     .padding(.leading, 20)
             case .notSignedIn:
-                notice("exclamationmark.triangle", "Keine Anmeldung in diesem Ordner. Im Terminal »\(kind.signInCommand(folder: folderText(provider, kind: kind)))« starten.", Severity.warn.color)
+                notice("exclamationmark.triangle", "Keine Anmeldung in diesem Ordner. Im Terminal »\(kind.signInCommand(folder: folderText(provider, kind: kind)))« starten.", Severity.warn.textColor, tint: Severity.warn.color)
                     .padding(.leading, 20)
             default:
                 EmptyView()
@@ -400,7 +402,8 @@ private struct AccountsSection: View {
             .fixedSize()
     }
 
-    private func notice(_ symbol: String, _ text: String, _ color: Color) -> some View {
+    /// Hinweis in der Zeile: Text und Symbol in `color`, Fläche aus `tint` (Standard: `color`).
+    private func notice(_ symbol: String, _ text: String, _ color: Color, tint: Color? = nil) -> some View {
         Label {
             // Volle Breite der Zeile, sonst bestimmt die Befehlszeile die Breite und der Satz
             // bricht nach jedem zweiten Wort um.
@@ -412,7 +415,7 @@ private struct AccountsSection: View {
         .foregroundStyle(color)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 6).fill(color.opacity(0.12)))
+        .background(RoundedRectangle(cornerRadius: 6).fill((tint ?? color).opacity(0.12)))
     }
 
     /// Ordner wie angezeigt; beim Standardkonto `~/.claude` bzw. `~/.codex`.

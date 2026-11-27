@@ -288,6 +288,6 @@ import TokenStatsCore
     @Test func missingFolderHintDependsOnHidden() {
         #expect(UsageStore.missingFolderHint(hidden: false)
             == "Ordner nicht gefunden. Das Konto steht grau im Menü. Ist das Laufwerk eingehängt, wird es wieder abgefragt.")
-        #expect(UsageStore.missingFolderHint(hidden: true) == "Ordner nicht gefunden. Das Konto ist ausgeblendet.")
+        #expect(UsageStore.missingFolderHint(hidden: true) == "Ordner nicht gefunden.", "„ausgeblendet“ steht schon darüber")
     }
 }

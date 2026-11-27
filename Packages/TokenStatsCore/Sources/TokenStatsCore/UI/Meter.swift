@@ -83,11 +83,14 @@ public struct MeterBar: View {
     public let percent: Double
     public let elapsed: Double?
     public let color: Color
+    /// Höhe der Pace-Marke: 10 pt am 6-pt-Balken, 8 pt am 4-pt-Kurzbalken (Entwurf §4.2).
+    public var markHeight: CGFloat
 
-    public init(percent: Double, elapsed: Double?, color: Color) {
+    public init(percent: Double, elapsed: Double?, color: Color, markHeight: CGFloat = 10) {
         self.percent = percent
         self.elapsed = elapsed
         self.color = color
+        self.markHeight = markHeight
     }
 
     public var body: some View {
@@ -110,14 +113,19 @@ public struct MeterBar: View {
                             .offset(x: width * min(used, elapsed))
                     }
                 }
+                // Feste Höhe: Sonst wächst der Balken auf die Höhe der Pace-Marke (6-pt-Balken
+                // wurden 10 pt, 4-pt-Kurzbalken 8 pt; Designer-Prüfung PR #5, Runde 12).
+                .frame(height: geo.size.height)
                 .clipShape(Capsule())
                 if let elapsed {
+                    // Die Marke ragt mittig über den Balken hinaus, ohne ihn zu strecken.
                     Rectangle()
                         .fill(.primary.opacity(0.45))
-                        .frame(width: 2, height: 10)
+                        .frame(width: 2, height: markHeight)
                         .offset(x: width * elapsed - 1)
                 }
             }
+            .frame(width: width, height: geo.size.height, alignment: .leading)
         }
     }
 }
