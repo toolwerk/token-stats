@@ -92,8 +92,9 @@ import Testing
     @Test func searchMatchesTitles() {
         let snapshot = DemoAccounts.widgetSnapshot(DemoAccounts.accounts(.many, now: now), now: now)
         #expect(LimitsAccounts.choices(matching: "kunde", in: snapshot).map(\.title)
-            == ["Claude · Kunde A", "Claude · Kunde B", "Claude · Kunde Schmidt Beratung"])
-        #expect(LimitsAccounts.choices(matching: "", in: snapshot).count == 1 + 1 + 8 + 2)
+            == ["Claude · Kunde A", "Claude · Kunde B", "Claude · Kunde Schmidt Beratung",
+                "Claude · kundenbetreuung-niederlassung-sued"])
+        #expect(LimitsAccounts.choices(matching: "", in: snapshot).count == 1 + 1 + 9 + 2)
         #expect(!LimitsAccounts.choices(matching: "", in: snapshot).contains { $0.title.contains("Testkonto") }, "ausgeblendet")
     }
 
@@ -120,6 +121,27 @@ import Testing
         #expect(LimitsAccounts.countText(snapshot) == "20 Konten")
         let one = DemoAccounts.widgetSnapshot(DemoAccounts.accounts(.one, now: now), now: now)
         #expect(LimitsAccounts.countText(one) == "4 Anbieter")
+    }
+
+    @Test func longAutomaticLabelIsNeverShortened() {
+        // Punkt 6 der Designer-Prüfung: automatische Bezeichnung mit mehr als 30 Zeichen.
+        let label = "kundenbetreuung-niederlassung-sued"
+        #expect(label.count == 34)
+        let many = DemoAccounts.widgetSnapshot(DemoAccounts.accounts(.many, now: now), now: now)
+        #expect(many.provider("claude@2468ace0")?.name == "Claude · \(label)")
+        #expect(LimitsAccounts.choice(for: "claude@2468ace0", in: many).title == "Claude · \(label)")
+        let twenty = DemoAccounts.widgetSnapshot(DemoAccounts.widgetAccounts(count: 20, now: now), now: now)
+        #expect(LimitsAccounts.rows(twenty).contains { $0.provider.name == "Claude · \(label)" }, "Tabellenzeile")
+    }
+
+    @Test func commandsAreSplitOutOfSentences() {
+        #expect(CommandSplit.parts("Keine Anmeldung in diesem Ordner. Im Terminal »CLAUDE_CONFIG_DIR=~/claude-alt claude« starten.")
+            == [.text("Keine Anmeldung in diesem Ordner. Im Terminal"), .command("CLAUDE_CONFIG_DIR=~/claude-alt claude"), .text("starten.")])
+        #expect(CommandSplit.parts("Etwa »codex«. Danach weiter.") == [.text("Etwa"), .command("codex"), .text("Danach weiter.")],
+                "Punkt hinter dem Befehl entfällt")
+        #expect(CommandSplit.parts("Nur Text.") == [.text("Nur Text.")])
+        #expect(CommandSplit.parts("»codex login«") == [.command("codex login")])
+        #expect(CommandSplit.parts("Offen »ohne Ende") == [.text("Offen »ohne Ende")], "ohne schließendes « kein Befehl")
     }
 
     // MARK: Datei

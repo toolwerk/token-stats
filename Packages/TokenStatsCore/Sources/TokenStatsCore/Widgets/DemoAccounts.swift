@@ -55,6 +55,12 @@ public enum DemoAccounts {
         let privat = claude(id: "claude", "Privat", "~/.claude", .standard, session: 0.42, week: 0.82, now: now, plan: "Max 20×")
         let arbeit = claude(id: "claude@a1b2c3d4", "Arbeit", "~/.claude-arbeit", .detected, session: 0.24, week: 0.51, now: now)
         let kundeA = claude(id: "claude@e5f6a7b8", "Kunde A", "/Volumes/Daten/kunde-a", .manual, session: 0.67, week: 1.0, now: now, plan: "Pro")
+        // Ohne eigene Bezeichnung: automatisch aus der E-Mail, 34 Zeichen, ein Wort mit
+        // Bindestrichen – wird nirgends gekürzt (Designer-Prüfung PR #5, Punkt 6).
+        var lang = claude(id: "claude@2468ace0", "Kundenbetreuung", "~/.claude-kundenbetreuung", .detected,
+                          session: 0.15, week: 0.47, now: now)
+        lang.label = nil
+        lang.email = DemoAccounts.longEmail
 
         switch scenario {
         case .one:
@@ -72,6 +78,7 @@ public enum DemoAccounts {
                 claude(id: "claude@55667788", "Agentur Nord", "~/.claude-agentur-nord", .detected, session: 0.31, week: 0.72, now: now),
                 testkonto,
                 claude(id: "claude@99aabbcc", "Schulung 2027", "~/.claude-schulung", .detected, session: 0.18, week: 0.44, now: now),
+                lang,
                 codex,
             ] + others
         case .empty:
@@ -102,8 +109,14 @@ public enum DemoAccounts {
             ("Kunde J", 0.0, 0.12), ("Kunde K", 0.02, 0.09), ("Kunde L", 0.0, 0.05),
         ]
         var accounts = names.prefix(max(count - 1, 0)).enumerated().map { index, entry in
-            claude(id: index == 1 ? "claude" : String(format: "claude@%08x", 0x1000 + index), entry.0, nil,
-                   index == 1 ? .standard : .detected, session: entry.1, week: entry.2, now: now)
+            var account = claude(id: index == 1 ? "claude" : String(format: "claude@%08x", 0x1000 + index), entry.0, nil,
+                                 index == 1 ? .standard : .detected, session: entry.1, week: entry.2, now: now)
+            if entry.0 == "Kunde D" {
+                // Automatische Bezeichnung mit 34 Zeichen statt einer eigenen (Punkt 6).
+                account.label = nil
+                account.email = longEmail
+            }
+            return account
         }
         if count > 0 {
             let demo = DemoData.snapshots(now: now)
@@ -145,6 +158,9 @@ public enum DemoAccounts {
         return "\(account.kindName) · \(label)"
     }
 
+    /// Adresse, deren lokaler Teil die automatische Bezeichnung mit 34 Zeichen ergibt.
+    public static let longEmail = "kundenbetreuung-niederlassung-sued@example.com"
+
     // MARK: Bausteine
 
     private static func account(_ kind: String, _ kindName: String, id: String, label: String? = nil, email: String? = nil,
@@ -177,9 +193,11 @@ extension DemoAccounts.Account {
         return false
     }
 
-    /// Eigene Bezeichnung, sonst Ordnername ohne Punkt (wie die automatische Bezeichnung).
+    /// Eigene Bezeichnung, sonst lokaler Teil der E-Mail, sonst Ordnername ohne Punkt – wie
+    /// die automatische Bezeichnung der App.
     public var displayLabel: String? {
         if let label { return label }
+        if let local = email?.split(separator: "@").first, !local.isEmpty { return String(local) }
         guard let folder else { return nil }
         let last = folder.split(separator: "/").last.map(String.init) ?? folder
         return last.hasPrefix(".") ? String(last.dropFirst()) : last

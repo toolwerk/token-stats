@@ -38,7 +38,7 @@ public struct MeterRow: View {
                 let layout = stackDetails ? AnyLayout(VStackLayout(alignment: .leading, spacing: 1)) : AnyLayout(HStackLayout())
                 layout {
                     if let resetsAt = window.resetsAt {
-                        Text("Reset \(Format.reset(resetsAt, now: now))").lineLimit(1).minimumScaleFactor(compact ? 0.75 : 1)
+                        Text("Reset \(Format.reset(resetsAt, now: now))").lineLimit(1)
                     }
                     if !stackDetails { Spacer(minLength: 6) }
                     if let elapsed, let windowLength = window.windowLength {
@@ -47,7 +47,6 @@ public struct MeterRow: View {
                             .fontWeight(onPace ? .regular : .semibold)
                             .foregroundStyle(onPace ? Color.secondary : window.severity.color)
                             .lineLimit(1)
-                            .minimumScaleFactor(compact ? 0.75 : 1)
                     }
                 }
                 .font(.system(size: compact ? 10 : 11))

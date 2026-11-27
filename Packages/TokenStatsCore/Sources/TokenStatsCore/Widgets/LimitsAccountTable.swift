@@ -72,7 +72,7 @@ struct LimitsAccountTable: View {
                         .fixedSize()
                         .frame(width: LimitsAccountTable.percentWidth, alignment: .trailing)
                 } else {
-                    Label(row.provider.message ?? "Noch kein Stand.", systemImage: "exclamationmark.triangle.fill")
+                    Label { CommandText(row.provider.message ?? "Noch kein Stand.") } icon: { Image(systemName: "exclamationmark.triangle.fill") }
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

@@ -25,44 +25,160 @@ public struct WidgetPlaceholder: View {
 }
 
 /// Kopfzeile der Widgets: Roboter · Titel · rechts der Zustandspunkt des knappsten Limits.
+///
+/// Nichts wird gekürzt (SPEC §6). Passt nicht alles in eine Zeile, nimmt der Kopf die erste
+/// passende Form: Details unter dem Titel; Titel am „·“ geteilt („Claude ·“ / „Kunde A“);
+/// Kontoname zweizeilig mit „Claude · Tarif“ darunter; erst zuletzt freier Umbruch. So hat ein
+/// Kontoname bis 24 Zeichen höchstens zwei Titelzeilen. Die Stufen S1–S8 aus „Widgets
+/// einheitlich“ (#4) ersetzen das später.
 struct WidgetHeader: View {
     let title: String
     let detail: String?
     let severity: Severity?
+    /// Pflichtdetail, das nie wegfällt und eine eigene Zeile über dem Tarif bekommt:
+    /// „knappstes Konto“, wenn das gezeigte Konto von selbst wechselt.
+    var selection: String? = nil
+
+    private static let titleFont = Font.system(size: 12, weight: .bold)
+    private static let detailFont = Font.system(size: 10.5)
 
     var body: some View {
-        // Erst alles in einer Zeile; passt das nicht, brechen Titel und Detail um. Nichts wird
-        // gekürzt – „knappstes Konto“ ist Pflicht, und Kontonamen bleiben ganz (SPEC §6).
-        // Die Stufen S1–S8 aus dem Entwurf „Widgets einheitlich“ ersetzen das später.
+        let parts = title.components(separatedBy: " · ")
+        let kind = parts.count > 1 ? parts[0] : nil
+        let account = parts.count > 1 ? parts.dropFirst().joined(separator: " · ") : nil
+        let splits = account.map(Self.twoLineSplits) ?? []
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 6) {
-                RobotIcon(size: 13)
-                Text(title).font(.system(size: 12, weight: .bold)).lineLimit(1).fixedSize()
-                if let detail {
-                    Text(detail).font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1).fixedSize()
-                }
-                Spacer(minLength: 6)
-                dot
-            }
-            HStack(alignment: .top, spacing: 6) {
-                RobotIcon(size: 13)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.system(size: 12, weight: .bold)).fixedSize(horizontal: false, vertical: true)
-                    if let detail {
-                        Text(detail).font(.system(size: 10.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            // Eine Zeile.
+            row(alignment: .center, dot: true) {
+                HStack(spacing: 6) {
+                    line(title, Self.titleFont)
+                    if let inline = [selection, detail].compactMap({ $0 }).joined(separator: " · ").nilIfEmpty {
+                        line(inline, Self.detailFont).foregroundStyle(.secondary)
                     }
                 }
-                Spacer(minLength: 6)
-                dot.padding(.top, 4)
+            }
+            // Titel in einer Zeile, Details darunter.
+            row(dot: true) { stack([line(title, Self.titleFont)], details: [selection, detail], dot: false) }
+            // Erst mit Punkt rechts im Kopf, dann mit Punkt in der Detailzeile (Titel 12 pt breiter).
+            // Kandidaten: Titel am „·“ („Claude ·“ / „Kunde A“), dann der Kontoname zweizeilig an
+            // Leerzeichen oder Bindestrich mit „Claude · Tarif“ darunter.
+            if let kind, let account {
+                ForEach(Self.candidates(splits: splits.count), id: \.self) { candidate in
+                    let dotInRow = candidate.dotInRow
+                    row(dot: dotInRow) {
+                        if let index = candidate.split {
+                            stack([line(splits[index][0], Self.titleFont), line(splits[index][1], Self.titleFont)],
+                                  details: [selection, [kind, detail].compactMap { $0 }.joined(separator: " · ")],
+                                  dot: !dotInRow)
+                        } else {
+                            stack([line(kind + " ·", Self.titleFont), line(account, .system(size: 12))],
+                                  details: [selection, detail], dot: !dotInRow)
+                        }
+                    }
+                }
+            }
+            // Letzter Ausweg: Umbruch nur an Leerzeichen und Bindestrichen, nie mitten im Wort.
+            row(dot: false) {
+                VStack(alignment: .leading, spacing: 1) {
+                    TokenFlow(spacing: 0) {
+                        ForEach(Array(Self.breakTokens(title).enumerated()), id: \.offset) { _, token in
+                            Text(token).font(Self.titleFont).lineLimit(1).fixedSize()
+                        }
+                    }
+                    stackDetails([selection, detail], dot: true)
+                }
             }
         }
     }
 
-    @ViewBuilder private var dot: some View {
+    private func row(alignment: VerticalAlignment = .top, dot: Bool, @ViewBuilder _ content: () -> some View) -> some View {
+        HStack(alignment: alignment, spacing: 6) {
+            RobotIcon(size: 13)
+            content()
+            if dot {
+                Spacer(minLength: 6)
+                circle.padding(.top, alignment == .top ? 4 : 0)
+            }
+        }
+    }
+
+    @ViewBuilder private var circle: some View {
         if let severity {
             Circle().fill(severity.color).frame(width: 7, height: 7)
         }
     }
+
+    private func stack(_ titleLines: [AnyView], details: [String?], dot: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(titleLines.indices, id: \.self) { titleLines[$0] }
+            stackDetails(details, dot: dot)
+        }
+    }
+
+    /// Detailzeilen; mit `dot` steht der Zustandspunkt rechts in der ersten (Stufe S7).
+    @ViewBuilder
+    private func stackDetails(_ details: [String?], dot: Bool) -> some View {
+        let lines = details.compactMap { $0?.nilIfEmpty }
+        ForEach(lines.indices, id: \.self) { index in
+            HStack(spacing: 6) {
+                line(lines[index], Self.detailFont).foregroundStyle(.secondary)
+                if dot, index == 0, severity != nil {
+                    Spacer(minLength: 6)
+                    circle
+                }
+            }
+        }
+        if dot, lines.isEmpty, severity != nil {
+            HStack { Spacer(minLength: 6); circle }
+        }
+    }
+
+    /// Eine Zeile, die nie umbricht – passt sie nicht, scheitert die Form (`ViewThatFits`).
+    private func line(_ text: String, _ font: Font) -> AnyView {
+        AnyView(Text(text).font(font).lineLimit(1).fixedSize())
+    }
+
+    /// Eine Form des zweizeiligen Titels; `split == nil` = Teilung am „·“.
+    struct Candidate: Hashable {
+        var dotInRow: Bool
+        var split: Int?
+    }
+
+    static func candidates(splits: Int) -> [Candidate] {
+        [true, false].flatMap { dot in
+            [Candidate(dotInRow: dot, split: nil)] + (0..<splits).map { Candidate(dotInRow: dot, split: $0) }
+        }
+    }
+
+    /// Stellen, an denen ein Name umbrechen darf: nach einem Leerzeichen oder Bindestrich.
+    /// „Kunde Schmidt Beratung“ → „Kunde “, „Schmidt “, „Beratung“.
+    static func breakTokens(_ text: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        for character in text {
+            current.append(character)
+            if character == " " || character == "-" {
+                tokens.append(current)
+                current = ""
+            }
+        }
+        if !current.isEmpty { tokens.append(current) }
+        return tokens
+    }
+
+    /// Alle Teilungen in zwei Zeilen an erlaubten Stellen, die längere erste Zeile zuerst.
+    static func twoLineSplits(_ text: String) -> [[String]] {
+        let tokens = breakTokens(text)
+        guard tokens.count > 1 else { return [] }
+        return (1..<tokens.count).reversed().map { split in
+            [tokens[..<split].joined().trimmingCharacters(in: .whitespaces),
+             tokens[split...].joined().trimmingCharacters(in: .whitespaces)]
+        }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
 /// „work · vor 12 Min.“ – nur für Stände, die über iCloud von einem Mac kamen.
@@ -285,7 +401,7 @@ public struct LimitsWidgetView: View {
 
     /// Pflichtdetail bei „Claude – knappstes Konto“: Das gezeigte Konto wechselt von selbst.
     private var selectionDetail: String? {
-        provider.flatMap(LimitsAccounts.tightestKind) == nil ? nil : "knappstes Konto"
+        provider.flatMap(LimitsAccounts.tightestKind) == nil ? nil : "knappstes\u{00A0}Konto"
     }
 
     @ViewBuilder
@@ -318,7 +434,7 @@ public struct LimitsWidgetView: View {
                         }
                     }
                 } else if let shown {
-                    WidgetHeader(title: shown.name, detail: selectionDetail, severity: nil)
+                    WidgetHeader(title: shown.name, detail: nil, severity: nil, selection: selectionDetail)
                     noData(shown)
                 } else if let provider {
                     // Gewähltes Konto steht nicht im Stand: beim Namen nennen, nie als `claude@…`.
@@ -379,7 +495,7 @@ public struct LimitsWidgetView: View {
     }
 
     private func note(_ text: String) -> some View {
-        Text(text)
+        CommandText(text)
             .font(.system(size: 11))
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -395,12 +511,11 @@ public struct LimitsWidgetView: View {
         let windows = all.filter { keep.contains($0.id) }
         // Die Spalten sind schmal; der Zusatz „7 d, alle Modelle“ passt nur im großen Widget.
         let showScope = size == .large
-        let plan = provider.isRateLimited ? "Abfrage pausiert" : provider.snapshot?.account?.plan
-        let details = [size == .large ? nil : selectionDetail, plan].compactMap { $0 }
         WidgetHeader(
             title: provider.name,
-            detail: details.isEmpty ? nil : details.joined(separator: "\u{00A0}· "),
-            severity: provider.snapshot?.tightestWindow?.severity
+            detail: provider.isRateLimited ? "Abfrage pausiert" : provider.snapshot?.account?.plan,
+            severity: provider.snapshot?.tightestWindow?.severity,
+            selection: size == .large ? nil : selectionDetail
         )
         if columns == 1 {
             ForEach(windows) { MeterRow(window: $0, compact: compact, showScope: showScope, stackDetails: true, now: now) }
