@@ -323,6 +323,11 @@ def load_creds(account):
     return json.load(open(f"{account['dir']}/.credentials.json"))["claudeAiOauth"]
 
 
+def decimal(x, places=2):
+    """Zahl mit deutschem Komma und Punkt als Tausendertrenner: 1234.5 -> „1.234,50“."""
+    return f"{x:,.{places}f}".translate(str.maketrans(",.", ".,"))
+
+
 def plan_label(c):
     tier = c.get("rateLimitTier") or ""
     m = re.search(r"max_(\d+)x", tier)
@@ -350,7 +355,7 @@ def fetch_limits(c):
     if extra.get("is_enabled"):
         div = 10 ** extra.get("decimal_places", 2)
         cur = {"EUR": "€", "USD": "$"}.get(extra.get("currency"), extra.get("currency", ""))
-        extra = f"Extra {extra['used_credits'] / div:,.2f} {cur} / {extra['monthly_limit'] / div:,.2f} {cur}"
+        extra = f"Extra {decimal(extra['used_credits'] / div)} {cur} / {decimal(extra['monthly_limit'] / div)} {cur}"
     else:
         extra = None
     return {"plan": plan_label(c), "limits": rows, "extra": extra}
@@ -544,7 +549,13 @@ def value_of(counts, model):
 
 
 def fmt(n):
-    return f"{n / 1e6:.1f} M" if n >= 1e6 else f"{n / 1e3:.0f} k" if n >= 1e3 else str(n)
+    """Tokenzahl kurz, mit deutschem Komma: 2,8 M, 245 k, 12."""
+    return f"{decimal(n / 1e6, 1)} M" if n >= 1e6 else f"{n / 1e3:.0f} k" if n >= 1e3 else str(n)
+
+
+def money(v):
+    """API-Vergleichswert in Dollar, deutsch geschrieben: 2,09 $."""
+    return f"{decimal(v)} $"
 
 
 def until(iso):
@@ -991,7 +1002,7 @@ class Popup(Gtk.Window):
 
         cards = Gtk.Box(spacing=10, homogeneous=True)
         for title, big, small in (("TOKENS", fmt(total), f"{fmt(cache)} davon Cache"),
-                                  ("API-VERGLEICHSWERT", f"{total_val:,.2f} $", "zu Listenpreisen")):
+                                  ("API-VERGLEICHSWERT", money(total_val), "zu Listenpreisen")):
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             card.get_style_context().add_class("ts-card")
             card.pack_start(label(title, "ts-dim"), False, False, 0)
@@ -1007,7 +1018,7 @@ class Popup(Gtk.Window):
             row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
             top = Gtk.Box()
             top.pack_start(label(model_name(model), "ts-h"), False, False, 0)
-            top.pack_end(label(f"{v:,.2f} $" if v is not None else "k. A.", "ts-h"), False, False, 0)
+            top.pack_end(label(money(v) if v is not None else "k. A.", "ts-h"), False, False, 0)
             row.pack_start(top, False, False, 0)
             row.pack_start(label(f"{fmt(c[0])} Input · {fmt(c[1])} Output · {fmt(c[2] + c[3] + c[4])} Cache", "ts-dim"),
                            False, False, 0)
@@ -1016,7 +1027,7 @@ class Popup(Gtk.Window):
         tot = Gtk.Box()
         tot.pack_start(label(f"{n} Tage · {fmt(total)} Tokens" if n > 1 else f"Heute · {fmt(total)} Tokens", "ts-h"),
                        False, False, 0)
-        tot.pack_end(label(f"{total_val:,.2f} $", "ts-h"), False, False, 0)
+        tot.pack_end(label(money(total_val), "ts-h"), False, False, 0)
         self.body.pack_start(tot, False, False, 0)
         asof = f" (Stand {PRICES_AS_OF})" if PRICES_AS_OF else ""
         source = (f"aller {len(accounts)} Konten zusammen (die Protokolle nennen kein Konto)"

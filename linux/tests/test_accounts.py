@@ -414,6 +414,40 @@ class InlineTest(unittest.TestCase):
             self.assertLessEqual(low, natural, command)
 
 
+class FormatTest(unittest.TestCase):
+    """Zahlen deutsch („2,8 M“, „2,09 $“), Wochentage deutsch – in GTK, im Backend und in util.js (Plasma)."""
+
+    def test_python(self):
+        for name, module in MODULES.items():
+            with self.subTest(module=name):
+                self.assertEqual(module.decimal(2.09), "2,09")
+                self.assertEqual(module.decimal(1234.5), "1.234,50")
+                self.assertEqual(module.decimal(2_800_000 / 1e6, 1), "2,8")
+        self.assertEqual((gtk.fmt(2_800_000), gtk.fmt(1_250_000), gtk.fmt(245_000), gtk.fmt(12)),
+                         ("2,8 M", "1,2 M", "245 k", "12"))
+        self.assertEqual((gtk.money(2.09), gtk.money(1234.5)), ("2,09 $", "1.234,50 $"))
+
+    @unittest.skipUnless(shutil.which("node"), "node fehlt")
+    def test_util_js(self):
+        with open(os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "code", "util.js")) as f:
+            js = f.read().replace(".pragma library", "")
+        js += """
+console.log(JSON.stringify([fmtTokens(2800000), fmtTokens(1250000), fmtTokens(245000), fmtMoney(2.09),
+  fmtMoney(1234.5), fmtMoney(0), weekdayShort(new Date(2026, 10, 30, 12)), weekdayShort(new Date(2026, 10, 24, 12)),
+  aggregate([{date: "2026-11-30", models: []}], 7).series[0].label]));
+"""
+        out = subprocess.run(["node", "-"], input=js, capture_output=True, text=True, check=True).stdout
+        self.assertEqual(json.loads(out), ["2,8 M", "1,3 M", "245 k", "2,09 $", "1.234,50 $", "0,00 $", "Mo", "Di", "Mo"])
+
+    def test_qml_uses_german_helpers(self):
+        with open(os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "ui", "FullView.qml")) as f:
+            qml = f.read()
+        self.assertNotIn("ddd", qml)
+        self.assertIn("U.weekdayShort(d)", qml)
+        self.assertIn("QQC2.ScrollBar.horizontal.policy: QQC2.ScrollBar.AlwaysOff", qml)
+        self.assertIn("visible: view.acc.limits.length > 0", qml)
+
+
 class WrapCommandTest(unittest.TestCase):
     """wrap_command: Befehle nie abschneiden, nie breiter als verfügbar; Plasma (util.js) rechnet gleich."""
     KUNDE = "CLAUDE_CONFIG_DIR=~/konten/kunde-a claude"

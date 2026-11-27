@@ -126,6 +126,11 @@ def wrap_command(command, max_chars, indent=2):
     return lines
 
 
+def decimal(x, places=2):
+    """Zahl mit deutschem Komma und Punkt als Tausendertrenner: 1234.5 -> „1.234,50“."""
+    return f"{x:,.{places}f}".translate(str.maketrans(",.", ".,"))
+
+
 def plan_label(c):
     m = re.search(r"max_(\d+)x", c.get("rateLimitTier") or "")
     return f"{c.get('subscriptionType', '').title()}{f' {m.group(1)}×' if m else ''}"
@@ -252,7 +257,7 @@ def fetch_limits(c):
     if extra.get("is_enabled"):
         div = 10 ** extra.get("decimal_places", 2)
         cur = {"EUR": "€", "USD": "$"}.get(extra.get("currency"), extra.get("currency", ""))
-        extra_txt = f"Extra {extra['used_credits'] / div:,.2f} {cur} / {extra['monthly_limit'] / div:,.2f} {cur}"
+        extra_txt = f"Extra {decimal(extra['used_credits'] / div)} {cur} / {decimal(extra['monthly_limit'] / div)} {cur}"
     return {"plan": plan_label(c), "limits": rows, "extra": extra_txt}
 
 

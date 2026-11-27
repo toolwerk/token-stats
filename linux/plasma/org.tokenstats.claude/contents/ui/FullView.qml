@@ -147,6 +147,8 @@ ColumnLayout {
         Layout.fillWidth: true
         Layout.fillHeight: true
         contentWidth: availableWidth
+        // nur senkrecht blättern: Inhalt bricht auf die Breite um, waagerecht gibt es nichts zu sehen
+        QQC2.ScrollBar.horizontal.policy: QQC2.ScrollBar.AlwaysOff
         ColumnLayout {
             width: parent.width
             spacing: Kirigami.Units.largeSpacing
@@ -263,6 +265,8 @@ ColumnLayout {
                 PC3.Label { text: view.acc.plan; opacity: 0.7; font.family: "monospace" }
                 Item { Layout.fillWidth: true }
                 PC3.Label {
+                    // ohne Stand (Fehlerkonto) kein Abzeichen – sonst stünde dort ein grünes „0 %“
+                    visible: view.acc.limits.length > 0
                     text: Math.round(worst) + " %"
                     font.bold: true
                     color: view.tint(worst)
@@ -306,7 +310,7 @@ ColumnLayout {
                                 if (!row.modelData.reset) return ""
                                 var d = new Date(row.modelData.reset)
                                 var soon = (d - Date.now()) < 86400000
-                                return "Reset " + (soon ? Qt.formatTime(d, "hh:mm") : Qt.formatDateTime(d, "ddd hh:mm"))
+                                return "Reset " + (soon ? "" : U.weekdayShort(d) + " ") + Qt.formatTime(d, "hh:mm")
                             }
                         }
                         Item { Layout.fillWidth: true }
@@ -336,7 +340,7 @@ ColumnLayout {
         ColumnLayout {
             id: usage
             spacing: Kirigami.Units.largeSpacing
-            readonly property var agg: U.aggregate(view.info.usage, view.rangeDays, Qt.locale())
+            readonly property var agg: U.aggregate(view.info.usage, view.rangeDays)
             RowLayout {
                 Kirigami.Heading { text: "Claude"; level: 3 }
                 PC3.Label {
@@ -394,10 +398,12 @@ ColumnLayout {
                     spacing: 0
                     RowLayout {
                         Layout.fillWidth: true
-                        Kirigami.Heading { text: modelData.model; level: 4; Layout.fillWidth: true }
+                        Kirigami.Heading { text: modelData.model; level: 4; Layout.fillWidth: true; wrapMode: Text.Wrap }
                         Kirigami.Heading { text: modelData.priced ? U.fmtMoney(modelData.value) : "k. A."; level: 4 }
                     }
                     PC3.Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
                         opacity: 0.7
                         text: U.fmtTokens(modelData.in) + " Input · " + U.fmtTokens(modelData.out) + " Output · " + U.fmtTokens(modelData.cache) + " Cache"
                     }
@@ -410,6 +416,7 @@ ColumnLayout {
                     text: (view.rangeDays === 1 ? "Heute" : view.rangeDays + " Tage") + " · " + U.fmtTokens(usage.agg.total) + " Tokens"
                     level: 4
                     Layout.fillWidth: true
+                    wrapMode: Text.Wrap
                 }
                 Kirigami.Heading { text: U.fmtMoney(usage.agg.value); level: 4 }
             }

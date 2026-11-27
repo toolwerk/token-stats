@@ -1,13 +1,27 @@
 .pragma library
 
+// Zahlen immer deutsch, unabhängig von LANG: Komma, Punkt als Tausendertrenner (wie GTK decimal())
+function decimal(x, places) {
+    var parts = Math.abs(x).toFixed(places).split(".")
+    var whole = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ".")
+    return (x < 0 ? "-" : "") + whole + (parts.length > 1 ? "," + parts[1] : "")
+}
+
 function fmtTokens(n) {
-    if (n >= 1e6) return (n / 1e6).toFixed(1) + " M"
+    if (n >= 1e6) return decimal(n / 1e6, 1) + " M"
     if (n >= 1e3) return Math.round(n / 1e3) + " k"
     return String(n)
 }
 
 function fmtMoney(v) {
-    return v.toLocaleString(Qt.locale(), "f", 2) + " $"
+    return decimal(v, 2) + " $"
+}
+
+// Wochentag kurz und deutsch, unabhängig von LANG (Qt.formatDateTime „ddd“ ergab „Mon“)
+var WEEKDAYS = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"]
+
+function weekdayShort(date) {
+    return WEEKDAYS[date.getDay()]
 }
 
 function duration(secs) {
@@ -26,7 +40,7 @@ function limitState(l) {
 }
 
 // usage: [{date, models:[{model,in,out,cache,value}]}] (oldest first, last = today); n = number of days
-function aggregate(usage, n, locale) {
+function aggregate(usage, n) {
     var days = usage.slice(Math.max(0, usage.length - n))
     var perModel = {}, series = [], total = 0, cache = 0, value = 0, unpriced = false
     for (var i = 0; i < days.length; i++) {
@@ -41,7 +55,7 @@ function aggregate(usage, n, locale) {
             cache += m.cache
         }
         var dt = new Date(d.date + "T12:00:00")
-        series.push({ label: n <= 7 ? locale.dayName(dt.getDay(), 1).substring(0, 2) : String(dt.getDate()),
+        series.push({ label: n <= 7 ? weekdayShort(dt) : String(dt.getDate()),
                       tokens: dayTokens, last: i === days.length - 1 })
     }
     var models = Object.keys(perModel).map(function (k) { return perModel[k] })
