@@ -120,6 +120,11 @@ public sealed record AccountEntry(IUsageProvider Provider, AccountStatus Status 
     /// </summary>
     public bool NeedsSetup => Status == AccountStatus.MissingFolder || (Status == AccountStatus.NotSignedIn && !CanFetch);
 
+    /// <summary>Roter Hinweis in den Einstellungen bei fehlendem Ordner, je nachdem, ob das Konto ausgeblendet ist.</summary>
+    public static string MissingFolderHint(bool hidden) => hidden
+        ? "Ordner nicht gefunden. Das Konto ist ausgeblendet."
+        : "Ordner nicht gefunden. Das Konto steht grau im Menü. Ist das Laufwerk eingehängt, wird es wieder abgefragt.";
+
     /// <summary>Haken in den Einstellungen: angezeigt und Ordner da. Fehlt der Ordner, bleibt das Kästchen leer.</summary>
     public bool ShowsAsChecked(bool hidden) => Status != AccountStatus.MissingFolder && !hidden;
 }

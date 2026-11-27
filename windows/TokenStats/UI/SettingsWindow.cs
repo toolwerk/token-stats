@@ -241,10 +241,10 @@ public sealed class SettingsWindow : Window
         var folder = Secondary(FolderText(kind, entry), indent: true);
         folder.FontFamily = new FontFamily("Cascadia Mono, Consolas");
         text.Children.Add(folder);
-        if (hidden && !missing) text.Children.Add(Secondary("Ausgeblendet, wird nicht abgefragt.", indent: true));
+        if (hidden) text.Children.Add(Secondary("Ausgeblendet, wird nicht abgefragt.", indent: true));
 
         if (missing)
-            text.Children.Add(Hint("Ordner nicht gefunden. Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.", Severity.Crit));
+            text.Children.Add(Hint(AccountEntry.MissingFolderHint(hidden), Severity.Crit));
         else if (entry.Status == AccountStatus.NotSignedIn)
             // Im Befehl der volle Pfad wie in den übrigen Windows-Hinweisen – PowerShell kennt kein %USERPROFILE%.
             text.Children.Add(Hint(kind.NotSignedInHint(entry.Source.Folder ?? ""), Severity.Warn));
