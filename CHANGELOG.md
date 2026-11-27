@@ -11,6 +11,16 @@ das GitHub-Release und für den Update-Dialog in der App.
   die Widgets nur noch neu, wenn sich wirklich etwas geändert hat, statt bei jeder Abfrage.
   Das schont das Kontingent, das macOS fürs Neuladen von Widgets vergibt; ist es
   aufgebraucht, bleiben Widgets stehen.
+- **Widgets einheitlich gestaltet:** Alle Widgets nutzen dieselben fünf Schriftgrößen und
+  festen Abstände; Text wird nicht mehr verkleinert und nie mit „…“ abgeschnitten. Passt
+  nicht alles, wählt das Widget eine knappere Darstellung. Das große Limits-Widget läuft
+  nicht mehr über: Es zeigt alle Anbieter, bei Platzmangel als Tabelle mit dem knappsten
+  Limit je Anbieter, und auch Anbieter mit Fehler („Anmeldung abgelaufen“). Das kleine
+  Limits-Widget zeigt die zwei knappsten Limits (bei Claude Woche und Opus). Lange
+  Kontonamen brechen in der Tabelle an Wortgrenzen um, und der Name des knappsten Limits
+  bleibt immer sichtbar.
+- **Neu: extragroße Widgets auf dem Mac** (nur Schreibtisch): Limits aller Anbieter in zwei
+  Spalten, Verbrauch mit breitem Tagesdiagramm und Modellen in zwei Spalten.
 - **Für Entwickler:** Debug-Builds haben eine eigene Bundle-ID (`de.mahype.TokenStats.debug`)
   und App Group, damit sie die installierte App und ihre Widgets nicht verdrängen.
   `make build` signiert ersatzweise auch mit „Developer ID Application“ und warnt deutlich,

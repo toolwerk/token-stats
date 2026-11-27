@@ -405,7 +405,10 @@ struct LimitWindow {
 ### Widgets (Issue #10, umgesetzt 26.10.2026)
 
 Verbrauch und Limits ohne Klick aufs Menüleistensymbol: zwei WidgetKit-Widgets für
-Mitteilungszentrale und Schreibtisch, je klein, mittel und groß.
+Mitteilungszentrale und Schreibtisch, je klein, mittel und groß, auf dem Mac dazu extragroß
+(nur Schreibtisch; iOS bleibt bei klein bis groß). Extragroß wird **immer** angeboten, auch
+bei nur einem oder zwei Konten – `systemExtraLarge` steht ohne Bedingung in den
+`supportedFamilies` (Sven, 27.11.2026).
 
 - **„Verbrauch“:** Tokens und API-Vergleichswert, klein als zwei Kennzahlen, mittel dazu
   das Tagesdiagramm (bei „Heute“ stattdessen Input/Output/Cache), groß zusätzlich die
@@ -413,10 +416,60 @@ Mitteilungszentrale und Schreibtisch, je klein, mittel und groß.
   sind Widget-Konfiguration per `AppIntent`. Der Zeitraum gilt für alle Größen – auch für
   das kleine Widget, damit die Einstellung nicht in einer Größe wirkungslos ist.
   Der Geldbetrag erscheint nur, wenn „API-Vergleichswert in Geld anzeigen“ an ist.
-- **„Limits“:** die Meter-Zeilen mit Pace-Marke wie im Popover, klein zwei Fenster,
-  mittel bis zu vier in zwei Spalten, groß alle Anbieter. Anbieter wählbar, Standard ist
-  der mit dem knappsten Limit. In den schmalen Spalten fällt der Zusatz („7 d, alle
-  Modelle“) weg, klein stehen Reset und Pace untereinander.
+  Extragroß zeigt das Tagesdiagramm über die volle Breite und die Modelle in zwei Spalten.
+- **„Limits“:** die Meter mit Pace-Marke wie im Popover. Klein und mittel zeigen genau ein
+  Konto: klein die **zwei knappsten Limits** (bei Claude Woche und Opus; Session steht im
+  mittleren Widget und in der App, Sven 27.11.2026), mittel bis zu vier in zwei Spalten.
+  Groß und extragroß zeigen alle Anbieter bzw. Konten, Fehlerkonten eingeschlossen.
+  Anbieter wählbar, Standard ist „Knappstes Limit“. Reset und Pace stehen in allen Größen
+  untereinander; der Zusatz („7 d“, „Wochenlimit“) steht nur in Abschnitten groß/extragroß
+  und nur, wenn er passt.
+- **Gestaltung (Entwurf „Widgets einheitlich“, 27.11.2026):** Systemschrift in fünf Graden
+  (Titel 13/16, Kennzahl 20/24 und 15/18, Zeile 11/14, Meta 10/12), Abstände 3 · 6 · 8 · 12 ·
+  16 pt, kein eigener Außenrand, kein `minimumScaleFactor`, nie „…“, nie ein Bruch mitten im
+  Wort. Einzeilige Texte haben einen festen Rahmen in Zeilenhöhe. Prozentwerte stehen
+  einzeilig in einer mindestens 38 pt breiten Spalte („100 %“ ist der Grenzfall). Farben nur
+  aus `Severity` (ab 80 % warn, ab 100 % crit), keine eigenen Schwellen in den Views. Bei
+  genau einem Anbieter entfällt der Zustandspunkt im Abschnittskopf, der im Widgetkopf
+  bleibt. Jede Größe hat eine
+  **Stufenleiter** von reich nach knapp, `ViewThatFits(in: .vertical)` nimmt die erste, die
+  ganz passt: klein S1–S8 (Kopf mit Detail → ohne Detail → zweizeilig → Titel am „·“ →
+  Kontoname als Titel → Punkt in der Detailzeile → als letzte Stufe Zeichenumbruch), groß
+  L1–L5 (Abschnitte mit allen bzw. den zwei knappsten Limits → Tabelle mit einer Zeile je
+  Konto und seinem knappsten Limit → mit Sammelzeile „+7 weitere Konten · höchstens 26 %“ →
+  Limitname als zweite Zeile unter dem Kontonamen statt in eigener Spalte), extragroß X1–X5
+  (Abschnitte über die volle Breite bzw. zweispaltig → eine Tabelle mit zwei Limits je
+  Konto → zwei Tabellen nebeneinander, mit Sammelzeile → X5-kurz mit dem Limitnamen unter
+  dem Kontonamen). Der Limitname fällt nie weg, bei pausierter Abfrage steht „pausiert“
+  mit Pause-Symbol dabei. Zeigt eine Stufe nur einen Teil der Limits (klein, M3, L2, X3),
+  sind es die knappsten, **absteigend nach Prozent**; zeigt sie alle, bleibt die
+  Reihenfolge der App. Kontonamen in Tabellen haben höchstens drei Zeilen und brechen nur
+  am „·“ und an Wortgrenzen; ist ein Wort breiter als die Spalte, scheitert die Stufe –
+  auch für Konten in der Sammelzeile, damit ein langer Name nicht nur wegen der Breite in
+  der Sammelzeile verschwindet, sondern die Stufe mit breiterer Namensspalte übernimmt.
+  In Tabellen stehen Konten mit Fehler oben, dann absteigend nach knappstem Limit; weil
+  absteigend sortiert ist, steckt in der Sammelzeile nie ein knapperes Konto als die
+  gezeigten (Fehlerkonten darin nennt sie: „· 2 mit Fehler“). Die letzte Stufe jeder Leiter
+  prüft nicht streng: Dort brechen einzeilige Texte um, statt am Rand abgeschnitten zu werden. Geprüft gegen die kleinste reale Mac-Kachel
+  (164 / 344 × 164 / 344 × 344 / 704 × 344 pt, Rand 18; extragroß aus dem Raster
+  abgeleitet, nicht gemessen); Debug-Builds loggen `context.displaySize`. Maße, Stufen und
+  Mockups: `konzept.md` des Designers (Thread `design/widgets-einheitlich`). Die Regeln
+  (Auswahl, Sortierung, Texte) liegen testbar in `WidgetLayout.swift` in TokenStatsCore.
+- **Mehrere Konten je Anbieter (kommt mit PR #2), Variante B, Sven 27.11.2026:** Ein
+  gespeichertes „Claude“ zeigt das **Standardkonto** – es behält die ID `claude`, bestehende
+  Widgets zeigen nach dem Update dasselbe wie vorher. Das knappste Claude-Konto bekommt
+  einen eigenen Eintrag „Claude – knappstes Konto“ (Vorschlag-ID `claude@knappstes`, erster
+  Eintrag der Claude-Gruppe); dort ist das Detail „knappstes Konto“ Pflicht und fällt in
+  keiner Stufe weg (`HeaderDetail.required`). Das frühere Verhalten „gespeicherter Anbieter
+  zeigt das knappste Konto“ (Variante A) ist verworfen. Titel heißen „Claude · Privat“
+  (Anbieter semibold, Konto regular), im Kopf steht wie überall der Tarif, nie
+  „Standardkonto“.
+- **Kontonamen höchstens 24 Zeichen** (Sven, 27.11.2026): Die Grenze gilt bei der
+  **Eingabe** (`AccountName.maxLength`, `AccountName.sanitized` in TokenStatsCore; das
+  Eingabefeld kommt mit PR #2), angezeigt wird nie gekürzt. Damit braucht ein Name in jeder
+  Größe höchstens zwei Titelzeilen. Ein Einwort-Name ab 15 Zeichen bricht im kleinen
+  Widget in der letzten Stufe zeichenweise; dafür zeigt das Eingabefeld den Hinweis
+  „mit Leerzeichen oder Bindestrich lesbarer“ (`AccountName.needsReadabilityHint`).
 - Klick aufs Widget öffnet das Popover auf der passenden Seite und beim passenden
   Anbieter, über das URL-Schema `tokenstats://usage|limits?provider=…&period=…`.
 - **Datenweg:** Die Erweiterung ist sandboxed, fragt keine Endpunkte ab, liest keine

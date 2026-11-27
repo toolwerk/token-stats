@@ -45,6 +45,9 @@ struct LimitsTimelineProvider: AppIntentTimelineProvider {
     }
 
     func timeline(for configuration: LimitsConfigurationIntent, in context: Context) async -> Timeline<LimitsEntry> {
+        #if DEBUG
+        WidgetSizeLog.log("limits", family: context.family, size: context.displaySize)
+        #endif
         let snapshot = WidgetSnapshot.loadForWidgets()
         let plan = WidgetTimeline.plan(now: .now, snapshot: snapshot)
         let entries = plan.dates.map {
@@ -64,7 +67,7 @@ struct LimitsWidget: Widget {
             LimitsWidgetEntryView(entry: entry)
         }
         .configurationDisplayName("Limits")
-        .description("Die Meter eines Anbieters mit Reset-Zeit und Pace-Marke – wie im Popover.")
+        .description("Die Meter eines Anbieters mit Reset-Zeit und Pace-Marke – wie im Popover. Groß und extragroß zeigen alle Anbieter.")
         .supportedFamilies(WidgetFamily.limitsFamilies)
     }
 }
@@ -86,7 +89,7 @@ struct LimitsWidgetEntryView: View {
             LimitsWidgetView(snapshot: entry.snapshot, provider: entry.provider, size: family.size, now: entry.date)
             #endif
         }
-        .widgetURL(WidgetLink.url(.init(page: .limits, provider: family.size == .large ? nil : shown)))
+        .widgetURL(WidgetLink.url(.init(page: .limits, provider: family.size.showsAllAccounts ? nil : shown)))
         .containerBackground(.fill.tertiary, for: .widget)
     }
 }

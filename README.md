@@ -117,13 +117,15 @@ Die drei Anzeige-Modi der Menüleiste:
   </picture>
 </p>
 
-Die Widgets „Verbrauch“ und „Limits“ in Klein, Mittel und Groß (Zeitraum und Anbieter
-sind je Widget einstellbar):
+Die Widgets „Verbrauch“ und „Limits“ in Klein, Mittel, Groß und Extragroß (Extragroß gibt es
+auf dem Mac nur auf dem Schreibtisch; Zeitraum und Anbieter sind je Widget einstellbar). Groß
+und extragroß zeigen alle Anbieter, bei Platzmangel als Tabelle mit dem knappsten Limit je
+Konto:
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="screenshots/widgets-dark.png">
-    <img src="screenshots/widgets-light.png" width="560" alt="Widgets: Verbrauch heute und 7 Tage, Limits von Claude, Verbrauch 30 Tage mit Modellen">
+    <img src="screenshots/widgets-light.png" width="560" alt="Widgets: Verbrauch heute und 7 Tage, Limits klein und mittel, Verbrauch und Limits groß und extragroß">
   </picture>
 </p>
 

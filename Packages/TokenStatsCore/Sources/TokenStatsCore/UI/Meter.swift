@@ -1,33 +1,29 @@
 import SwiftUI
 
-/// Eine Meter-Zeile mit Balken, Pace-Marke und Reset-Zeit (SPEC §3.4) – im Popover und
-/// in den Widgets dieselbe. `compact` rückt Schrift und Abstände für kleine Widgets zusammen.
+/// Eine Meter-Zeile mit Balken, Pace-Marke und Reset-Zeit (SPEC §3.4) – im Popover und in der
+/// iOS-App. Die Widgets haben eigene Bausteine (`MeterBlock` in WidgetBlocks.swift) mit den
+/// Maßen aus dem Widget-Entwurf.
 public struct MeterRow: View {
     public let window: LimitWindow
-    public var compact: Bool
-    /// Zusatz wie „7 d, alle Modelle“ hinter dem Namen – in schmalen Widget-Spalten weggelassen.
+    /// Zusatz wie „7 d, alle Modelle“ hinter dem Namen.
     public var showScope: Bool
-    /// Reset und Pace untereinander statt nebeneinander – fürs kleine Widget.
-    public var stackDetails: Bool
     public var now: Date
 
-    public init(window: LimitWindow, compact: Bool = false, showScope: Bool = true, stackDetails: Bool = false, now: Date = .now) {
+    public init(window: LimitWindow, showScope: Bool = true, now: Date = .now) {
         self.window = window
-        self.compact = compact
         self.showScope = showScope
-        self.stackDetails = stackDetails
         self.now = now
     }
 
     public var body: some View {
         let elapsed = window.elapsedFraction(now: now)
-        VStack(spacing: compact ? 4 : 6) {
+        VStack(spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                Text(window.name).font(.system(size: compact ? 11.5 : 12.5, weight: .semibold))
-                    + Text(showScope ? window.scopeNote.map { "  \($0)" } ?? "" : "").font(.system(size: compact ? 10 : 11)).foregroundColor(.secondary)
+                Text(window.name).font(.system(size: 12.5, weight: .semibold))
+                    + Text(showScope ? window.scopeNote.map { "  \($0)" } ?? "" : "").font(.system(size: 11)).foregroundColor(.secondary)
                 Spacer()
                 Text(Format.percent(window.percent))
-                    .font(.system(size: compact ? 11.5 : 12.5, weight: .bold))
+                    .font(.system(size: 12.5, weight: .bold))
                     .foregroundStyle(window.severity.color)
                     .monospacedDigit()
             }
@@ -35,22 +31,20 @@ public struct MeterRow: View {
                 .frame(height: 6)
             // Ollama nennt keine Reset-Zeiten – dann bleibt die Zeile weg statt leer.
             if window.resetsAt != nil || elapsed != nil {
-                let layout = stackDetails ? AnyLayout(VStackLayout(alignment: .leading, spacing: 1)) : AnyLayout(HStackLayout())
-                layout {
+                HStack {
                     if let resetsAt = window.resetsAt {
-                        Text("Reset \(Format.reset(resetsAt, now: now))").lineLimit(1).minimumScaleFactor(compact ? 0.75 : 1)
+                        Text("Reset \(Format.reset(resetsAt, now: now))").lineLimit(1)
                     }
-                    if !stackDetails { Spacer(minLength: 6) }
+                    Spacer(minLength: 6)
                     if let elapsed, let windowLength = window.windowLength {
                         let onPace = abs(window.percent - elapsed) < Format.paceTolerance
                         Text(Format.pace(percent: window.percent, elapsed: elapsed, windowLength: windowLength))
                             .fontWeight(onPace ? .regular : .semibold)
                             .foregroundStyle(onPace ? Color.secondary : window.severity.color)
                             .lineLimit(1)
-                            .minimumScaleFactor(compact ? 0.75 : 1)
                     }
                 }
-                .font(.system(size: compact ? 10 : 11))
+                .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -65,11 +59,14 @@ public struct MeterBar: View {
     public let percent: Double
     public let elapsed: Double?
     public let color: Color
+    /// Höhe der Pace-Marke: 10 pt am 6-pt-Balken, 8 pt am 4-pt-Kurzbalken der Widgets.
+    public var markHeight: CGFloat
 
-    public init(percent: Double, elapsed: Double?, color: Color) {
+    public init(percent: Double, elapsed: Double?, color: Color, markHeight: CGFloat = 10) {
         self.percent = percent
         self.elapsed = elapsed
         self.color = color
+        self.markHeight = markHeight
     }
 
     public var body: some View {
@@ -96,7 +93,7 @@ public struct MeterBar: View {
                 if let elapsed {
                     Rectangle()
                         .fill(.primary.opacity(0.45))
-                        .frame(width: 2, height: 10)
+                        .frame(width: 2, height: markHeight)
                         .offset(x: width * elapsed - 1)
                 }
             }
