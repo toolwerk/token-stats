@@ -217,11 +217,15 @@ import Testing
     }
 
     @Test func characterBreakKeepsAtLeastThreeCharacters() {
-        // Runde 7: kein einzelnes „T“ oder „TT“ als letztes Stück.
-        let lines = titleLines("MÖBELWERKSTATT", 13)
-        #expect(lines == ["MÖBELWERKS", "TATT"] || lines.last.map { $0.count >= TitleWrap.minimumTail } == true)
-        #expect(titleLines("MÖBELWERKSTATT", 12) == ["MÖBELWERKST", "ATT"], "nicht „MÖBELWERKSTAT“ / „T“")
-        #expect(titleLines("MÖBELWERKSTATT", 13).last?.count ?? 0 >= 3)
+        // Runde 7/8: kein einzelnes „T“ oder „TT“ als letztes Stück – genaue Erwartungen.
+        #expect(titleLines("MÖBELWERKSTATT", 13) == ["MÖBELWERKST", "ATT"], "nicht „MÖBELWERKSTAT“ / „T“")
+        #expect(titleLines("MÖBELWERKSTATT", 12) == ["MÖBELWERKST", "ATT"], "nicht „MÖBELWERKSTA“ / „TT“")
+        #expect(titleLines("MÖBELWERKSTATT", 11) == ["MÖBELWERKST", "ATT"], "passt schon so")
+        #expect(titleLines("MÖBELWERKSTATT", 10) == ["MÖBELWERKS", "TATT"])
+        for width in stride(from: CGFloat(4), through: 13, by: 1) {
+            let lines = titleLines("MÖBELWERKSTATT", width)
+            #expect(lines.count == 1 || (lines.last?.count ?? 0) >= TitleWrap.minimumTail, "Breite \(width)")
+        }
     }
 
     @Test func wholeLineIsMeasuredWithKerning() {
@@ -242,15 +246,43 @@ import Testing
         let word = WrappedTitle.widestUnbreakable("Claude · Verwaltungsgesellschaft", size: 11, prefix: "Claude · ",
                                                   prefixWeight: .semibold, accountWeight: .regular)
         #expect(word <= LimitsAccountTable.nameWidth(total: 308, stacked: true))
-        let normal = LimitsAccounts.rows(DemoAccounts.widgetSnapshot(DemoAccounts.accounts(.many, now: now), now: now))
-        #expect(!LimitsAccountTable.needsStacked(normal, total: 308), "normale Namen bleiben in der normalen Tabelle")
+        // Nur kurze Namen (multi): normale Tabelle. „many“ enthält den langen automatischen
+        // Namen, der seit Runde 8 wegen mehr als 3 Zeilen zu Recht L5 auslöst.
+        let normal = LimitsAccounts.rows(DemoAccounts.widgetSnapshot(DemoAccounts.accounts(.multi, now: now), now: now))
+        #expect(!LimitsAccountTable.needsStacked(normal, total: 308), "kurze Namen bleiben in der normalen Tabelle")
+    }
+
+    @Test func twentyAccountsInTheSmallestTileTakeL5() {
+        // Runde 8, §11: höchstens 3 Zeilen je Kontoname. Bei 20 Konten in der kleinsten großen
+        // Kachel (308 pt Inhalt) bräuchte „Claude · kundenbetreuung-niederlassung-sued“ in der
+        // normalen Spalte 4 Zeilen – also L5, gemessen mit dem echten Umbruch.
+        let rows = LimitsAccounts.rows(DemoAccounts.widgetSnapshot(DemoAccounts.widgetAccounts(count: 20, now: now), now: now))
+        let available = LimitsAccountTable.nameWidth(total: 308, stacked: false) - LimitsAccountTable.columnSlack
+        let lines = WrappedTitle.lineCount("Claude · kundenbetreuung-niederlassung-sued", size: LimitsAccountTable.nameSize,
+                                           prefix: "Claude · ", prefixWeight: .semibold, accountWeight: .regular, available: available)
+        #expect(lines > LimitsAccountTable.maxNameLines)
+        #expect(LimitsAccountTable.needsStacked(rows, total: 308))
+        // In L5 kommt derselbe Name mit höchstens 3 Zeilen aus.
+        let stacked = LimitsAccountTable.nameWidth(total: 308, stacked: true) - LimitsAccountTable.columnSlack
+        #expect(WrappedTitle.lineCount("Claude · kundenbetreuung-niederlassung-sued", size: LimitsAccountTable.nameSize,
+                                       prefix: "Claude · ", prefixWeight: .semibold, accountWeight: .regular, available: stacked)
+            <= LimitsAccountTable.maxNameLines)
+    }
+
+    @Test func narrowFitCountsAsTooWide() {
+        // Runde 8, §5: 2 pt Spielraum. „MÖBELWERKSTATT“ (≈ 103 pt) in der 104-pt-Spalte der
+        // kleinsten großen Kachel nimmt L5.
+        let accounts = DemoAccounts.accounts(.multi, now: now) + [DemoAccounts.wideNameAccount(now: now)]
+        let rows = LimitsAccounts.rows(DemoAccounts.widgetSnapshot(accounts, now: now))
+        #expect(LimitsAccountTable.columnSlack == 2)
+        #expect(LimitsAccountTable.needsStacked(rows, total: 308))
     }
 
     @Test func detailLinesStartWithTheSeparator() {
         #expect(WidgetHeader.detailVariant([nil, "Max 20× · +1 Limit"], 1) == ["Max 20×", "· +1 Limit"])
         #expect(WidgetHeader.detailVariant(["knappstes Konto", "Claude · Pro · +2 Limits"], 2)
             == ["knappstes Konto", "Claude", "· Pro", "· +2 Limits"])
-        #expect(WidgetHeader.detailTokens("Max 20× · +1 Limit") == ["Max 20× ", "· +1 Limit"])
+        #expect(WidgetHeader.detailTokens("Max 20× · +1 Limit") == ["Max 20×", "· +1 Limit"], "kein Leerzeichen am Ende")
     }
 
     @Test func titleNeverWiderThanAvailable() {

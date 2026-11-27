@@ -217,6 +217,17 @@ public struct WrappedTitle: View {
         }
     }
 
+    /// Zeilen, die der Titel bei `available` Breite braucht – mit dem echten Umbruch gemessen.
+    public nonisolated static func lineCount(_ text: String, size: CGFloat, prefix: String? = nil,
+                                             prefixWeight: Font.Weight = .bold, accountWeight: Font.Weight = .bold,
+                                             available: CGFloat) -> Int {
+        let characters = Array(text)
+        let boldCount = prefix.map { text.hasPrefix($0) ? $0.count : text.count } ?? text.count
+        return TitleWrap.lines(characters, available: available) { range in
+            TextWidth.measure(runs(characters, range, boldCount: boldCount, prefixWeight, accountWeight), size: size)
+        }.count
+    }
+
     /// Text einer Zeile in zwei Läufen: Anbieterteil und Kontoteil.
     nonisolated static func runs(_ characters: [Character], _ range: Range<Int>, boldCount: Int,
                      _ prefixWeight: Font.Weight, _ accountWeight: Font.Weight) -> [(text: String, weight: Font.Weight)] {

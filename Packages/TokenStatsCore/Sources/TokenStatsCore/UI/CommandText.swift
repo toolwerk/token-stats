@@ -257,7 +257,8 @@ struct CommandWrapLayout: Layout {
 }
 
 /// Teile nebeneinander, bei Platzmangel in die nächste Zeile – ohne einen Teil zu kürzen.
-/// Meldet nie mehr Breite als angeboten.
+/// Meldet nie mehr Breite als angeboten. `spacing` ist der Abstand zwischen zwei Teilen (etwa die
+/// Breite eines Leerzeichens); am Zeilenende zählt er nicht mit.
 struct TokenFlow: Layout {
     var spacing: CGFloat
 
@@ -295,7 +296,9 @@ struct TokenFlow: Layout {
         var row = Row()
         for (index, subview) in subviews.enumerated() {
             let size = subview.sizeThatFits(.unspecified)
-            if !row.indices.isEmpty, row.width + spacing + size.width > width + 0.5 {
+            // Ohne Toleranz: Die Teile tragen kein Leerzeichen am Ende (der Abstand ist `spacing`),
+            // und Messen und Platzieren rechnen mit derselben Breite.
+            if !row.indices.isEmpty, row.width + spacing + size.width > width {
                 rows.append(row)
                 row = Row()
             }

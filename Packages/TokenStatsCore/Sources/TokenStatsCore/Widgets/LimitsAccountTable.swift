@@ -29,14 +29,27 @@ struct LimitsAccountTable: View {
         stacked ? total - barWidth - percentWidth - 16 : total - limitWidth - barWidth - percentWidth - 24
     }
 
-    /// Braucht die Tabelle bei dieser Breite die Stufe L5, weil sonst ein Wort umbräche?
+    /// Spielraum der Spalte „Konto“ (Entwurf §5): Ein Name, der nur knapp hineinpasst
+    /// („MÖBELWERKSTATT“ 103,15 pt in 104 pt), gilt als zu breit – Rundung und Kerning dürfen
+    /// nicht entscheiden, ob er im Wort bricht.
+    nonisolated static let columnSlack: CGFloat = 2
+    /// Höchstens so viele Zeilen darf ein Kontoname in der Tabelle belegen (Entwurf §11).
+    nonisolated static let maxNameLines = 3
+
+    /// Braucht die Tabelle bei dieser Breite die Stufe L5? Ja, wenn ein Wort eines Kontonamens
+    /// nicht in die Spalte „Konto“ passt (sonst bräche es im Wort) oder wenn ein Name mit dem
+    /// echten Umbruch mehr als drei Zeilen bräuchte – jeweils mit 2 pt Spielraum.
     nonisolated static func needsStacked(_ rows: [LimitsAccounts.Row], total: CGFloat) -> Bool {
-        let available = nameWidth(total: total, stacked: false)
+        let available = nameWidth(total: total, stacked: false) - columnSlack
         return rows.contains { row in
             let prefix = row.provider.providerName + " · "
-            return WrappedTitle.widestUnbreakable(row.provider.name, size: nameSize,
-                                                  prefix: row.provider.name.hasPrefix(prefix) ? prefix : nil,
-                                                  prefixWeight: .semibold, accountWeight: .regular) > available + 0.001
+            let usedPrefix = row.provider.name.hasPrefix(prefix) ? prefix : nil
+            let word = WrappedTitle.widestUnbreakable(row.provider.name, size: nameSize, prefix: usedPrefix,
+                                                      prefixWeight: .semibold, accountWeight: .regular)
+            if word > available { return true }
+            let lines = WrappedTitle.lineCount(row.provider.name, size: nameSize, prefix: usedPrefix,
+                                               prefixWeight: .semibold, accountWeight: .regular, available: available)
+            return lines > maxNameLines
         }
     }
 

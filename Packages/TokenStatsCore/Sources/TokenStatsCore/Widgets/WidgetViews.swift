@@ -115,7 +115,7 @@ struct WidgetHeader: View {
                         // spacing 0: Der Abstand zum Punkt kommt nur vom Spacer (Entwurf §3: sonst
                         // werden aus 6 pt 12 pt und „Claude · Max 5×“ bricht um).
                         HStack(alignment: .top, spacing: 0) {
-                            TokenFlow(spacing: 0) {
+                            TokenFlow(spacing: Self.detailSpace) {
                                 ForEach(Array(Self.detailTokens(details[index]).enumerated()), id: \.offset) { _, token in
                                     Text(token).font(Self.detailFont).foregroundStyle(.secondary).lineLimit(1).fixedSize()
                                 }
@@ -130,7 +130,7 @@ struct WidgetHeader: View {
                         }
                     }
                     if details.isEmpty, severity != nil {
-                        HStack { Spacer(minLength: 6); circle }
+                        HStack(spacing: 0) { Spacer(minLength: 6); circle }
                     }
                 }
             }
@@ -141,11 +141,14 @@ struct WidgetHeader: View {
     /// wobei „+2 Limits“ und „Max 20×“ zusammenbleiben.
     nonisolated static func detailTokens(_ text: String) -> [String] {
         // Der Trennpunkt beginnt den nächsten Teil („Max 20×“ / „· +2 Limits“), wie im Titel.
+        // Kein Leerzeichen am Ende: Den Abstand setzt `TokenFlow` (`detailSpace`), und am
+        // Zeilenende zählt er nicht mit.
         let parts = text.components(separatedBy: " · ")
-        return parts.enumerated().map { index, part in
-            (index == 0 ? "" : "· ") + part + (index == parts.count - 1 ? "" : " ")
-        }
+        return parts.enumerated().map { index, part in (index == 0 ? "" : "· ") + part }
     }
+
+    /// Breite eines Leerzeichens in der Detailschrift – Abstand zwischen zwei Detail-Teilen.
+    nonisolated static let detailSpace: CGFloat = TextWidth.measure([(" ", .regular)], size: 10.5)
 
     private func row(alignment: VerticalAlignment = .top, dot: Bool, @ViewBuilder _ content: () -> some View) -> some View {
         // Abstände ausdrücklich, ohne Stack-Spacing obendrauf (Entwurf §3): Icon → Titel 6,
@@ -200,7 +203,7 @@ struct WidgetHeader: View {
             }
         }
         if dot, lines.isEmpty, severity != nil {
-            HStack { Spacer(minLength: 6); circle }
+            HStack(spacing: 0) { Spacer(minLength: 6); circle }
         }
     }
 
