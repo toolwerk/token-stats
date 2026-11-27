@@ -55,17 +55,16 @@ public static class CommandText
         }
     }
 
-    /// <summary>Zeichen, nach denen ein zu langer Teil umbrechen darf; das Zeichen bleibt am Zeilenende.</summary>
-    static readonly char[] SoftBreaks = ['/', '\\', '=', '_', '-', '.', ':'];
-
     /// <summary>Einrückung der Folgezeilen eines umbrochenen Befehls, in Zeichen.</summary>
     public const int ContinuationIndent = 2;
 
     /// <summary>
     /// Bricht einen Befehl auf höchstens <paramref name="maxChars"/> Zeichen je Zeile um (Monospace,
-    /// also Zeichen = Breite): zuerst am letzten Leerzeichen, sonst nach dem letzten von / \ = _ - . :,
-    /// erst als letzter Ausweg hart. Folgezeilen sind um <see cref="ContinuationIndent"/> Zeichen
-    /// eingerückt, die Einrückung zählt mit; führende Leerzeichen einer Folgezeile entfallen.
+    /// also Zeichen = Breite). Rangfolge innerhalb der Zeilenlänge: letztes Leerzeichen, sonst nach dem
+    /// letzten „=“, sonst nach dem letzten „/“ oder „\“, sonst nach dem letzten von „- _ . :“, erst als
+    /// letzter Ausweg hart. Das Zeichen bleibt am Zeilenende. Nie nach einem „.“, mit dem ein
+    /// Ordnername beginnt („~/.claude“) – so wandert ein Pfadstück ganz in die nächste Zeile.
+    /// Folgezeilen sind um <see cref="ContinuationIndent"/> Zeichen eingerückt, die Einrückung zählt mit; führende Leerzeichen einer Folgezeile entfallen.
     /// Keine Zeile wird länger als <paramref name="maxChars"/>.
     /// </summary>
     public static List<string> Wrap(string command, int maxChars)
@@ -95,7 +94,10 @@ public static class CommandText
             }
             else
             {
-                var soft = rest.LastIndexOfAny(SoftBreaks, limit - 1);
+                var text = rest;
+                var soft = LastBreak(text, limit, (c, _) => c == '=');
+                if (soft < 0) soft = LastBreak(text, limit, (c, _) => c is '/' or '\\');
+                if (soft < 0) soft = LastBreak(text, limit, (c, i) => c is '-' or '_' or ':' || (c == '.' && !StartsName(text, i)));
                 var cut = soft >= 0 ? soft + 1 : limit;
                 line = rest[..cut];
                 rest = rest[cut..].TrimStart();
@@ -104,4 +106,16 @@ public static class CommandText
         }
         return lines;
     }
+
+    /// <summary>Letzte Stelle vor <paramref name="limit"/>, nach der umbrochen werden darf, sonst −1.</summary>
+    static int LastBreak(string text, int limit, Func<char, int, bool> accepts)
+    {
+        for (var index = Math.Min(limit, text.Length) - 1; index >= 0; index--)
+            if (accepts(text[index], index)) return index;
+        return -1;
+    }
+
+    /// <summary>„.“ am Anfang eines Ordner- oder Dateinamens (<c>~/.claude</c>, <c>=.codex</c>) – dort kein Bruch.</summary>
+    static bool StartsName(string text, int index) =>
+        index == 0 || text[index - 1] is '/' or '\\' or '=' or '~' or ' ' or '"';
 }

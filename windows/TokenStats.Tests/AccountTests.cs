@@ -183,17 +183,24 @@ public sealed class AccountTests : IDisposable
         // Nach „=“, und als letzter Ausweg hart.
         Assert.Equal(new[] { "KEY=", "  valueval", "  uevalue" }, CommandText.Wrap("KEY=valuevaluevalue", 10));
         Assert.Equal(new[] { "abcd", "  ef", "  gh", "  ij" }, CommandText.Wrap("abcdefghij", 4));
+        // Rangfolge: Leerzeichen, dann „=“, dann „/“; nie nach dem Punkt in „~/.claude“ – das Pfadstück wandert ganz weiter.
+        Assert.Equal(new[] { "CLAUDE_CONFIG_DIR=", "  ~/.claude-alt claude" }, CommandText.Wrap("CLAUDE_CONFIG_DIR=~/.claude-alt claude", 29));
+        Assert.Equal(new[] { "CLAUDE_CONFIG_DIR=", "  ~/.claude-alt", "  claude" }, CommandText.Wrap("CLAUDE_CONFIG_DIR=~/.claude-alt claude", 20));
+        Assert.Equal(new[] { "~/", "  .claude-", "  alt" }, CommandText.Wrap("~/.claude-alt", 10));
+        // „=“ geht vor „/“, auch wenn ein „/“ weiter hinten noch passen würde.
+        Assert.Equal(new[] { "A=", "  b/c/d/", "  e/f" }, CommandText.Wrap("A=b/c/d/e/f", 9));
         // Für die Einrückung zu schmal: ohne Einrückung, aber nie breiter.
         Assert.Equal(new[] { "ab", "cd" }, CommandText.Wrap("abcd", 2));
 
         // Für jede Breite: keine Zeile zu lang, nichts geht verloren.
         var codex = AccountDiscovery.FolderKind.Codex.LoginCommand(@"C:\Users\Kunde A\.codex-arbeit");
-        foreach (var cmd in new[] { command, codex })
+        foreach (var cmd in new[] { command, codex, "CLAUDE_CONFIG_DIR=~/.claude-alt claude", "$env:CODEX_HOME=\"C:\\Daten\\.codex-arbeit\"; codex" })
             for (var width = 1; width <= 70; width++)
             {
                 var lines = CommandText.Wrap(cmd, width);
                 Assert.All(lines, line => Assert.True(line.Length <= width, $"{width}: „{line}“"));
                 Assert.Equal(cmd.Replace(" ", ""), string.Concat(lines).Replace(" ", ""));
+                Assert.DoesNotContain(lines, line => line.EndsWith("/.") || line.EndsWith("\\."));
             }
     }
 
