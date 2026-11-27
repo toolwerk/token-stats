@@ -35,9 +35,11 @@ public sealed class TrayApp : IDisposable
     {
         Settings = new AppSettings(demo ? null : Path.Combine(DataDirectory, "settings.json"));
         // Konten: Standard, %USERPROFILE%\.claude-* usw. und Ordner aus den Einstellungen (SPEC §6).
-        List<IUsageProvider> Discover() => new AccountDiscovery(manualFolders: Settings.AccountFolders).Providers();
-        Store = new UsageStore(demo ? [new ClaudeProvider(), new CodexProvider(), new AntigravityProvider(), new OllamaProvider()] : Discover(),
-                               Settings, demo ? null : Path.Combine(DataDirectory, "state.json"), demo ? null : Discover);
+        // Einträge mit Zustand: Fehlende und doppelte Ordner bleiben sichtbar, werden aber nicht abgefragt.
+        IReadOnlyList<AccountEntry> Discover() => new AccountDiscovery(manualFolders: Settings.AccountFolders).Entries();
+        Store = demo
+            ? new UsageStore([new ClaudeProvider(), new CodexProvider(), new AntigravityProvider(), new OllamaProvider()], Settings, cachePath: null)
+            : new UsageStore([], Settings, Path.Combine(DataDirectory, "state.json"), Discover);
         Consumption = new ConsumptionStore(Settings, demo ? null : UsageLedger.DefaultPath) { Roots = () => Store.LogRoots };
         popup = new PopupWindow(Store, Consumption, Settings, OpenSettings);
     }
@@ -74,7 +76,7 @@ public sealed class TrayApp : IDisposable
     {
         var pick = Store.Displayed;
         var snapshot = pick is null ? null : Store.State(pick.ProviderId).Snapshot;
-        var paused = Store.InstalledProviders.Any(p => Store.State(p.Id).IsRateLimited);
+        var paused = Store.PolledProviders.Any(p => Store.State(p.Id).IsRateLimited);
         var size = Forms.SystemInformation.SmallIconSize.Width;
         var bitmap = StatusIcon.Render(new StatusIcon.Input(
             Settings.MenuBarMode, pick?.Window.Severity, pick?.Window.Percent,

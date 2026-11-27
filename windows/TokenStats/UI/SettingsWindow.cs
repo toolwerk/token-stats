@@ -1,6 +1,8 @@
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
 using TokenStats.Model;
 using TokenStats.Providers;
 using TokenStats.Usage;
@@ -15,6 +17,11 @@ public sealed class SettingsWindow : Window
     readonly AppSettings settings;
     readonly UsageStore store;
     readonly ConsumptionStore consumption;
+    /// <summary>Farben der Hinweise im Abschnitt „Konten“.</summary>
+    readonly Palette palette = new(SystemTheme.AppsDark);
+    readonly StackPanel accountList = new();
+    /// <summary>Konto, dessen Bezeichnung gerade bearbeitet wird.</summary>
+    string? editingId;
 
     public SettingsWindow(AppSettings settings, UsageStore store, ConsumptionStore consumption)
     {
@@ -27,7 +34,9 @@ public sealed class SettingsWindow : Window
         SizeToContent = SizeToContent.Height;
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        Content = Build();
+        // Mit vielen Konten und Hinweisen wird das Fenster lang: dann scrollen statt über den Bildschirm hinaus.
+        MaxHeight = SystemParameters.WorkArea.Height;
+        Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = Build() };
     }
 
     UIElement Build()
@@ -86,98 +95,413 @@ public sealed class SettingsWindow : Window
     }
 
     /// <summary>
-    /// Abschnitt „Konten“ (SPEC §6 „Mehrere Konten je Anbieter“): erkannte Konten mit Schalter und
-    /// Bezeichnung, dazu Ordner von Hand hinzufügen. Jede Änderung sucht die Konten neu.
+    /// Abschnitt „Konten“ (SPEC §6 „Mehrere Konten je Anbieter“): Gruppen „Claude“, „Codex“ und „Weitere
+    /// Anbieter“, je Konto Schalter, Herkunft, E-Mail, Ordner und Hinweise. Nichts wird gekürzt.
     /// </summary>
     void Accounts(StackPanel root)
     {
         Section(root, "Konten");
-        var list = new StackPanel();
-        root.Children.Add(list);
+        root.Children.Add(accountList);
+        FillAccounts();
+        // PowerShell-Form wie die übrigen Windows-Hinweise; $env:USERPROFILE wird in "…" aufgelöst.
+        Note(root, "Weitere Konten legst du mit eigenem Ordner an: »$env:CLAUDE_CONFIG_DIR=\"$env:USERPROFILE\\.claude-2\"; claude« bzw. "
+                   + "»$env:CODEX_HOME=\"$env:USERPROFILE\\.codex-2\"; codex«. Ordner wie %USERPROFILE%\\.claude-2 findet Token Stats selbst. "
+                   + "Ausgeblendete Konten werden nicht abgefragt.");
+    }
 
-        void Changed()
+    /// <summary>Jede Änderung an den Konten sucht sie neu, fragt fällige ab und liest den Verbrauch neu.</summary>
+    void AccountsChanged()
+    {
+        store.ReloadAccounts();
+        store.Refresh(manual: false);
+        consumption.Refresh();
+        FillAccounts();
+    }
+
+    void FillAccounts()
+    {
+        accountList.Children.Clear();
+        var listed = store.Entries.Where(entry => entry.IsListed).ToList();
+        var kinds = AccountDiscovery.FolderKind.All;
+        bool HasFolders(AccountEntry entry) => kinds.Any(kind => kind.Id == entry.Kind);
+
+        if (!listed.Any(HasFolders))
+            accountList.Children.Add(EmptyAccounts());
+        else
+            foreach (var kind in kinds)
+                accountList.Children.Add(AccountGroup(kind, listed.Where(entry => entry.Kind == kind.Id).ToList()));
+
+        var others = listed.Where(entry => !HasFolders(entry)).ToList();
+        if (others.Count > 0) accountList.Children.Add(OtherProviders(others));
+    }
+
+    UIElement EmptyAccounts()
+    {
+        var panel = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
+        panel.Children.Add(new TextBlock { Text = "Noch kein Konto gefunden", FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock
         {
-            store.ReloadAccounts();
-            store.Refresh(manual: false);
-            consumption.Refresh();
-            Fill();
-        }
-
-        void Fill()
-        {
-            list.Children.Clear();
-            foreach (var provider in store.Providers.Where(p => p.IsInstalled()))
-            {
-                var grid = new Grid { Margin = new Thickness(0, 6, 0, 0) };
-                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                grid.ColumnDefinitions.Add(new ColumnDefinition());
-                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
-                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-                var id = provider.Id;
-                var show = new CheckBox { IsChecked = !settings.IsHidden(id), VerticalAlignment = VerticalAlignment.Center, ToolTip = "Anzeigen" };
-                show.Click += (_, _) =>
-                {
-                    settings.SetHidden(id, show.IsChecked != true);
-                    Changed();
-                };
-                grid.Children.Add(show);
-
-                var email = provider.Source.Email ?? store.State(id).Snapshot?.Account?.Name;
-                var origin = provider.Source.FolderDisplay ?? (provider.IsDefaultAccount ? "Standard" : null);
-                var text = new StackPanel { Margin = new Thickness(6, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
-                text.Children.Add(new TextBlock { Text = provider.DisplayName + (email is null ? "" : $" · {email}"), TextTrimming = TextTrimming.CharacterEllipsis });
-                if (origin is not null)
-                    text.Children.Add(new TextBlock { Text = origin, FontSize = 12, Opacity = 0.7, TextTrimming = TextTrimming.CharacterEllipsis });
-                Grid.SetColumn(text, 1);
-                grid.Children.Add(text);
-
-                var label = new TextBox
-                {
-                    Text = settings.AccountLabels.GetValueOrDefault(id) ?? "",
-                    ToolTip = $"Bezeichnung (automatisch: {provider.Source.AutomaticLabel ?? "–"})",
-                    VerticalAlignment = VerticalAlignment.Center,
-                };
-                label.LostFocus += (_, _) => settings.SetAccountLabel(id, label.Text);
-                Grid.SetColumn(label, 2);
-                grid.Children.Add(label);
-
-                if (provider.Source is { Origin: AccountOrigin.Manual, Folder: { } folder })
-                {
-                    var kind = provider.Kind;
-                    var remove = new Button { Content = "Entfernen", Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-                    remove.Click += (_, _) =>
-                    {
-                        settings.RemoveAccountFolder(kind, folder);
-                        Changed();
-                    };
-                    Grid.SetColumn(remove, 3);
-                    grid.Children.Add(remove);
-                }
-                list.Children.Add(grid);
-            }
-        }
-        Fill();
-
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 8, 0, 0) };
+            Text = "Melde dich in Claude Code oder Codex an. Liegt eine Anmeldung in einem anderen Ordner, füge ihn hier hinzu.",
+            TextWrapping = TextWrapping.Wrap,
+            Opacity = 0.7,
+            Margin = new Thickness(0, 4, 0, 0),
+        });
+        var buttons = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
         foreach (var kind in AccountDiscovery.FolderKind.All)
         {
-            var button = new Button { Content = $"{kind.DisplayName}-Ordner hinzufügen …", Margin = new Thickness(6, 0, 0, 0), Padding = new Thickness(8, 2, 8, 2) };
-            button.Click += (_, _) =>
-            {
-                var dialog = new Microsoft.Win32.OpenFolderDialog
-                {
-                    Title = $"Ordner, den {kind.Variable} für das weitere Konto nennt",
-                    InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                };
-                if (dialog.ShowDialog(this) != true) return;
-                settings.AddAccountFolder(kind.Id, dialog.FolderName);
-                Changed();
-            };
+            var button = AddFolderButton(kind);
+            button.Margin = new Thickness(0, 0, 8, 4);
             buttons.Children.Add(button);
         }
-        root.Children.Add(buttons);
-        Note(root, "Weitere Konten legt die CLI mit eigenem Ordner an: CLAUDE_CONFIG_DIR bzw. CODEX_HOME. Ordner wie %USERPROFILE%\\.claude-2 werden automatisch gefunden. Ausgeblendete Konten werden nicht abgefragt.");
+        panel.Children.Add(buttons);
+        return panel;
+    }
+
+    UIElement AccountGroup(AccountDiscovery.FolderKind kind, List<AccountEntry> entries)
+    {
+        var group = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        group.Children.Add(GroupHeading(kind.DisplayName));
+        foreach (var entry in entries.Where(e => e.Status != AccountStatus.Duplicate))
+            group.Children.Add(AccountRow(kind, entry));
+        // Doppelte Ordner als Info-Zeilen unter den Konten der Gruppe.
+        foreach (var entry in entries.Where(e => e.Status == AccountStatus.Duplicate))
+            group.Children.Add(DuplicateRow(kind, entry));
+        var add = AddFolderButton(kind);
+        add.HorizontalAlignment = HorizontalAlignment.Right;
+        add.Margin = new Thickness(0, 10, 0, 0);
+        group.Children.Add(add);
+        return group;
+    }
+
+    static TextBlock GroupHeading(string text) => new()
+    {
+        Text = text.ToUpper(Format.Culture),
+        FontSize = 11,
+        FontWeight = FontWeights.SemiBold,
+        Opacity = 0.65,
+        Margin = new Thickness(0, 8, 0, 0),
+    };
+
+    /// <summary>Eine Zeile je Konto: Schalter mit Bezeichnung, Herkunft, E-Mail, Ordner, Hinweise; rechts Stift und „Entfernen“.</summary>
+    UIElement AccountRow(AccountDiscovery.FolderKind kind, AccountEntry entry)
+    {
+        var id = entry.Id;
+        var provider = entry.Provider;
+        var missing = entry.Status == AccountStatus.MissingFolder;
+        var hidden = settings.IsHidden(id);
+        var editing = editingId == id && !missing;
+
+        var grid = new Grid { Margin = new Thickness(0, 10, 0, 0) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var text = new StackPanel();
+        if (editing)
+        {
+            text.Children.Add(LabelEditor(entry));
+        }
+        else
+        {
+            // Angehakt = anzeigen; ein Klick auf den Namen schaltet mit.
+            var show = new CheckBox
+            {
+                Content = Wrapped(store.Label(provider) ?? provider.DisplayName),
+                IsChecked = !hidden,
+                IsEnabled = !missing,
+                ToolTip = "Anzeigen",
+                MinWidth = 0,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 0),
+            };
+            show.Click += (_, _) =>
+            {
+                settings.SetHidden(id, show.IsChecked != true);
+                AccountsChanged();
+            };
+            var name = new WrapPanel();
+            name.Children.Add(show);
+            name.Children.Add(Badge(entry.Source.Origin switch
+            {
+                AccountOrigin.Standard => "Standard",
+                AccountOrigin.Detected => "automatisch gefunden",
+                _ => "von Hand",
+            }));
+            text.Children.Add(name);
+        }
+
+        // E-Mail aus der Kontodatei, sonst aus dem letzten Abruf (Codex nennt dort die E-Mail).
+        var snapshotName = store.State(id).Snapshot?.Account?.Name;
+        var email = entry.Source.Email ?? (snapshotName is not null && snapshotName.Contains('@') ? snapshotName : null);
+        if (email is not null) text.Children.Add(Secondary(email, indent: true));
+        var folder = Secondary(FolderText(kind, entry), indent: true);
+        folder.FontFamily = new FontFamily("Cascadia Mono, Consolas");
+        text.Children.Add(folder);
+        if (hidden && !missing) text.Children.Add(Secondary("Ausgeblendet, wird nicht abgefragt.", indent: true));
+
+        if (missing)
+            text.Children.Add(Hint("Ordner nicht gefunden. Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.", Severity.Crit));
+        else if (entry.Status == AccountStatus.NotSignedIn)
+            // Im Befehl der volle Pfad wie in den übrigen Windows-Hinweisen – PowerShell kennt kein %USERPROFILE%.
+            text.Children.Add(Hint(kind.NotSignedInHint(entry.Source.Folder ?? ""), Severity.Warn));
+        grid.Children.Add(text);
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(8, 0, 0, 0) };
+        if (!missing && !editing)
+        {
+            var pen = new Button
+            {
+                Content = new TextBlock { Text = "\uE70F", FontFamily = Ui.Icons, FontSize = 12 },
+                ToolTip = "Bezeichnung ändern",
+                MinWidth = 0,
+                Padding = new Thickness(8, 4, 8, 4),
+            };
+            pen.Click += (_, _) =>
+            {
+                editingId = id;
+                FillAccounts();
+            };
+            buttons.Children.Add(pen);
+        }
+        if (RemoveButton(kind, entry) is { } remove)
+        {
+            remove.Margin = new Thickness(buttons.Children.Count > 0 ? 6 : 0, 0, 0, 0);
+            buttons.Children.Add(remove);
+        }
+        Grid.SetColumn(buttons, 1);
+        grid.Children.Add(buttons);
+        return grid;
+    }
+
+    /// <summary>
+    /// Bezeichnung bearbeiten: Feld über die volle Breite mit der automatischen Bezeichnung als
+    /// Platzhalter, „Fertig“ (Enter) übernimmt, Esc bricht ab. Leer = automatische Bezeichnung.
+    /// </summary>
+    UIElement LabelEditor(AccountEntry entry)
+    {
+        var id = entry.Id;
+        var automatic = store.AutomaticLabel(entry.Provider);
+        var own = settings.AccountLabels.GetValueOrDefault(id) ?? "";
+
+        var box = new TextBox
+        {
+            Text = own,
+            MaxLength = AppSettings.MaxAccountLabelLength,
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        // Echter Platzhalter: TextBox kennt keinen, darum ein Text darüber, der Klicks durchlässt.
+        var placeholder = new TextBlock
+        {
+            Text = automatic?.Text ?? "",
+            IsHitTestVisible = false,
+            Opacity = 0.5,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(11, 0, 0, 0),
+            TextTrimming = TextTrimming.None,
+        };
+        var field = new Grid();
+        field.Children.Add(box);
+        field.Children.Add(placeholder);
+
+        var done = new Button { Content = "Fertig", MinWidth = 0, Padding = new Thickness(12, 4, 12, 4), Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+        var line = new Grid();
+        line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        line.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(done, 1);
+        line.Children.Add(field);
+        line.Children.Add(done);
+
+        var hint = Secondary(automatic is { Origin: { } origin }
+            ? $"Leer lassen für „{automatic.Text}“ ({origin.Description()}). Höchstens {AppSettings.MaxAccountLabelLength} Zeichen."
+            : $"Höchstens {AppSettings.MaxAccountLabelLength} Zeichen.", indent: false);
+        var longWords = Secondary("Lange Wörter mit Leerzeichen oder Bindestrich trennen, dann bleibt die Bezeichnung im kleinen Widget lesbar.", indent: false);
+
+        void UpdateHints()
+        {
+            placeholder.Visibility = box.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+            longWords.Visibility = HasLongWord(box.Text) ? Visibility.Visible : Visibility.Collapsed;
+        }
+        UpdateHints();
+        box.TextChanged += (_, _) => UpdateHints();
+
+        void Finish(bool save)
+        {
+            // Unverändert nichts speichern – sonst würde ein älterer, längerer Wert gekürzt.
+            if (save && box.Text != own) settings.SetAccountLabel(id, box.Text);
+            editingId = null;
+            FillAccounts();
+        }
+        done.Click += (_, _) => Finish(save: true);
+        box.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                e.Handled = true;
+                Finish(save: true);
+            }
+            else if (e.Key == Key.Escape)
+            {
+                e.Handled = true;
+                Finish(save: false);
+            }
+        };
+        box.Loaded += (_, _) =>
+        {
+            box.Focus();
+            box.SelectAll();
+        };
+
+        var panel = new StackPanel();
+        panel.Children.Add(line);
+        panel.Children.Add(hint);
+        panel.Children.Add(longWords);
+        return panel;
+    }
+
+    /// <summary>Wort mit mehr als 14 Zeichen – bricht im kleinen Widget schlecht um.</summary>
+    static bool HasLongWord(string text) =>
+        text.Split(new[] { ' ', '-', '\t' }, StringSplitOptions.RemoveEmptyEntries).Any(word => word.Length > 14);
+
+    /// <summary>Doppelter Ordner: Info statt stillem Verwerfen, bei „von Hand“ mit „Entfernen“.</summary>
+    UIElement DuplicateRow(AccountDiscovery.FolderKind kind, AccountEntry entry)
+    {
+        var other = entry.DuplicateOf is { } otherId ? store.Entry(otherId) : null;
+        var otherLabel = other is null ? entry.DuplicateOf ?? "" : store.Label(other.Provider) ?? other.Provider.DisplayName;
+        var grid = new Grid { Margin = new Thickness(0, 10, 0, 0) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var info = Hint($"{FolderText(kind, entry)} gehört zum selben Konto wie „{otherLabel}“ und wird nicht doppelt gezeigt.", severity: null);
+        info.Margin = new Thickness(0);
+        grid.Children.Add(info);
+        if (RemoveButton(kind, entry) is { } remove)
+        {
+            remove.Margin = new Thickness(8, 0, 0, 0);
+            remove.VerticalAlignment = VerticalAlignment.Top;
+            Grid.SetColumn(remove, 1);
+            grid.Children.Add(remove);
+        }
+        return grid;
+    }
+
+    /// <summary>„Entfernen“ gibt es nur für Ordner „von Hand“.</summary>
+    Button? RemoveButton(AccountDiscovery.FolderKind kind, AccountEntry entry)
+    {
+        if (entry.Source is not { Origin: AccountOrigin.Manual, Folder: { } folder }) return null;
+        var id = entry.Id;
+        var remove = new Button { Content = "Entfernen", MinWidth = 0, Padding = new Thickness(10, 4, 10, 4), VerticalAlignment = VerticalAlignment.Top };
+        remove.Click += (_, _) =>
+        {
+            if (editingId == id) editingId = null;
+            settings.RemoveAccountFolder(kind.Id, folder);
+            AccountsChanged();
+        };
+        return remove;
+    }
+
+    UIElement OtherProviders(List<AccountEntry> entries)
+    {
+        var group = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+        group.Children.Add(GroupHeading("Weitere Anbieter"));
+        foreach (var entry in entries)
+        {
+            var id = entry.Id;
+            var row = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
+            var show = new CheckBox
+            {
+                Content = Wrapped(entry.Provider.DisplayName),
+                IsChecked = !settings.IsHidden(id),
+                ToolTip = "Anzeigen",
+                MinWidth = 0,
+                HorizontalAlignment = HorizontalAlignment.Left,
+            };
+            show.Click += (_, _) =>
+            {
+                settings.SetHidden(id, show.IsChecked != true);
+                AccountsChanged();
+            };
+            row.Children.Add(show);
+            row.Children.Add(Secondary("Eine Quelle je Rechner, keine weiteren Konten möglich.", indent: true));
+            if (settings.IsHidden(id)) row.Children.Add(Secondary("Ausgeblendet, wird nicht abgefragt.", indent: true));
+            group.Children.Add(row);
+        }
+        return group;
+    }
+
+    Button AddFolderButton(AccountDiscovery.FolderKind kind)
+    {
+        var button = new Button { Content = $"{kind.DisplayName}-Ordner hinzufügen …", Padding = new Thickness(8, 2, 8, 2) };
+        button.Click += (_, _) =>
+        {
+            var dialog = new Microsoft.Win32.OpenFolderDialog
+            {
+                Title = $"Ordner, den {kind.Variable} für das weitere Konto nennt",
+                InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            };
+            if (dialog.ShowDialog(this) != true) return;
+            // Erscheint sofort als Zeile – mit Hinweis, falls doppelt oder ohne Anmeldung.
+            settings.AddAccountFolder(kind.Id, dialog.FolderName);
+            AccountsChanged();
+        };
+        return button;
+    }
+
+    /// <summary>Ordner in Anzeigeform; beim Standardkonto der feste Ordner im Profil.</summary>
+    static string FolderText(AccountDiscovery.FolderKind kind, AccountEntry entry) =>
+        entry.Source.FolderDisplay
+        ?? AccountSource.Display(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), kind.StandardFolder));
+
+    static TextBlock Wrapped(string text) => new() { Text = text, TextWrapping = TextWrapping.Wrap };
+
+    /// <summary>Sekundäre Zeile unter dem Namen; <paramref name="indent"/> rückt sie bis unter den Text der Checkbox ein.</summary>
+    static TextBlock Secondary(string text, bool indent) => new()
+    {
+        Text = text,
+        FontSize = 12,
+        Opacity = 0.7,
+        TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(indent ? CheckIndent : 0, 3, 0, 0),
+    };
+
+    /// <summary>Abstand vom linken Rand der Checkbox bis zu ihrem Text (Fluent: 20 px Kästchen + 8 px Abstand).</summary>
+    const double CheckIndent = 28;
+
+    /// <summary>Herkunfts-Abzeichen neben dem Namen.</summary>
+    static Border Badge(string text) => new()
+    {
+        CornerRadius = new CornerRadius(4),
+        Padding = new Thickness(6, 1, 6, 2),
+        Background = Palette.Solid(0x808080, 0x30),
+        VerticalAlignment = VerticalAlignment.Center,
+        Child = new TextBlock { Text = text, FontSize = 11, TextWrapping = TextWrapping.Wrap },
+    };
+
+    /// <summary>Hinweis in der Zeile, eigene Fläche: rot/gelb mit Warndreieck, ohne Stufe grau mit Info-Symbol.</summary>
+    Border Hint(string text, Severity? severity)
+    {
+        var rgb = severity is { } level ? Palette.SeverityColor(level, palette.IsDark) : 0x808080;
+        var icon = new TextBlock
+        {
+            Text = severity is null ? "\uE946" : "\uE7BA",
+            FontFamily = Ui.Icons,
+            FontSize = 12,
+            Foreground = severity is null ? palette.Secondary : palette.SeverityBrush(severity.Value),
+            Margin = new Thickness(0, 2, 8, 0),
+            VerticalAlignment = VerticalAlignment.Top,
+        };
+        var label = new TextBlock { Text = text, FontSize = 12, TextWrapping = TextWrapping.Wrap };
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        Grid.SetColumn(label, 1);
+        grid.Children.Add(icon);
+        grid.Children.Add(label);
+        return new Border
+        {
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(8, 6, 8, 6),
+            Margin = new Thickness(CheckIndent, 6, 0, 0),
+            Background = Palette.Solid(rgb, 0x26),
+            Child = grid,
+        };
     }
 
     static string Version =>

@@ -28,7 +28,10 @@ public sealed class PopupView
     public Palette Palette { get; set; } = new(SystemTheme.AppsDark);
     public Func<DateTimeOffset> Now { get; set; } = () => DateTimeOffset.Now;
 
+    /// <summary>Gewähltes Konto (oder Anbieter-ID); <c>null</c> = knappstes Konto über alle.</summary>
     string? selectedId;
+    /// <summary>Zuletzt gewähltes Konto je Anbieter – ein Klick auf den Anbieter-Tab kehrt dorthin zurück.</summary>
+    readonly Dictionary<string, string> lastByKind = [];
     /// <summary>Beim Öffnen steht immer „Limits“ – die Auswahl wird absichtlich nicht gemerkt.</summary>
     PopupPage page;
     UsagePeriod period = UsagePeriod.Week;
@@ -46,6 +49,7 @@ public sealed class PopupView
     public void Reset(string? selected = null, PopupPage startPage = PopupPage.Limits)
     {
         selectedId = selected;
+        lastByKind.Clear();
         page = startPage;
         period = UsagePeriod.Week;
     }
@@ -59,31 +63,63 @@ public sealed class PopupView
     public FrameworkElement Build()
     {
         var p = Palette;
-        var all = store.SortedProviders;
-        // „Verbrauch“ gilt je Anbieter: dort ein Tab je Anbieter statt je Konto (SPEC §6).
-        var providers = page == PopupPage.Usage ? all.DistinctBy(provider => provider.Kind).ToList() : all;
-        // Beim Öffnen ist der knappste Anbieter aktiv, die Tab-Reihenfolge bleibt fest.
+        var entries = store.SortedEntries;
+        // Ein Tab je Anbieter auf beiden Seiten; die Konten wählt auf „Limits“ die Kontoleiste.
+        var kinds = entries.Select(entry => entry.Provider).DistinctBy(provider => provider.Kind).ToList();
+        // Beim Öffnen ist das knappste Konto aktiv, die Tab-Reihenfolge bleibt fest.
         var activeId = selectedId ?? store.Tightest?.ProviderId;
-        var active = all.FirstOrDefault(provider => provider.Id == activeId) ?? all.FirstOrDefault(provider => provider.Kind == activeId);
-        var selected = page == PopupPage.Usage
-            ? providers.FirstOrDefault(provider => provider.Kind == active?.Kind) ?? providers.FirstOrDefault()
-            : active ?? providers.FirstOrDefault();
+        var selected = entries.FirstOrDefault(entry => entry.Id == activeId)
+                       ?? entries.FirstOrDefault(entry => entry.Kind == activeId)
+                       ?? entries.FirstOrDefault();
 
         var root = new StackPanel { Width = Width };
         root.Children.Add(Header());
-        if (providers.Count == 0)
+        if (selected is null)
         {
             root.Children.Add(EmptyState());
         }
         else
         {
-            root.Children.Add(TabBar(providers, selected?.Id));
+            root.Children.Add(TabBar(kinds, selected.Kind));
+            var accounts = entries.Where(entry => entry.Kind == selected.Kind).ToList();
+            if (page == PopupPage.Limits && accounts.Count >= 2) root.Children.Add(AccountBar(accounts, selected.Id));
             root.Children.Add(Ui.Divider(p.Separator));
-            if (selected is not null) root.Children.Add(ProviderPage(selected));
+            root.Children.Add(ProviderPage(selected));
         }
         root.Children.Add(Ui.Divider(p.Separator));
         root.Children.Add(Footer(selected is null ? null : store.State(selected.Id).Snapshot?.Account));
         return root;
+    }
+
+    /// <summary>Anbieter-Tab: zuletzt gewähltes Konto dieses Anbieters, sonst sein knappstes.</summary>
+    void SelectKind(string kind)
+    {
+        var accounts = store.AccountsOfKind(kind);
+        if (lastByKind.TryGetValue(kind, out var last) && accounts.Any(account => account.Id == last))
+            selectedId = last;
+        else
+            selectedId = store.TightestOf(kind)?.ProviderId ?? accounts.FirstOrDefault()?.Id ?? kind;
+    }
+
+    void SelectAccount(AccountEntry entry)
+    {
+        selectedId = entry.Id;
+        lastByKind[entry.Kind] = entry.Id;
+    }
+
+    /// <summary>
+    /// Konto ohne Stand, das sich nicht abfragen lässt oder nur Fehler liefert: grau mit „!“ in der
+    /// Kontoleiste, auf der Seite ein Hinweis mit „Einstellungen öffnen“.
+    /// </summary>
+    bool IsFaulty(AccountEntry entry)
+    {
+        var state = store.State(entry.Id);
+        return entry.Status switch
+        {
+            AccountStatus.MissingFolder => true,
+            AccountStatus.NotSignedIn => state.Snapshot is null,
+            _ => state.Snapshot is null && state.Error is not null,
+        };
     }
 
     // Kopf
@@ -119,33 +155,19 @@ public sealed class PopupView
 
     // Tabs
 
-    const int MaxLabelLength = 12;
-
-    UIElement TabBar(List<IUsageProvider> providers, string? selected)
+    UIElement TabBar(List<IUsageProvider> kinds, string selectedKind)
     {
         var p = Palette;
         var row = Ui.Row(2);
         row.Margin = new Thickness(Inset - 10, 0, Inset - 10, 0);
-        var labels = providers.ToDictionary(provider => provider.Id,
-            provider => page == PopupPage.Usage ? null : Shorten(store.AccountLabel(provider)));
-        var visibleCount = VisibleTabCount(providers.Select(provider => (provider.DisplayName, labels[provider.Id])).ToList());
-        foreach (var provider in providers.Take(visibleCount))
+        var visibleCount = VisibleTabCount(kinds.Select(provider => provider.DisplayName).ToList());
+        foreach (var provider in kinds.Take(visibleCount))
         {
-            var isActive = provider.Id == selected;
-            var severity = store.State(provider.Id).Snapshot?.TightestWindow?.Severity;
-            var dot = new System.Windows.Shapes.Ellipse
-            {
-                Width = 5, Height = 5, VerticalAlignment = VerticalAlignment.Center,
-                Fill = severity is { } s ? p.SeverityBrush(s) : p.Secondary,
-                Opacity = severity is null ? 0.4 : 1,
-            };
-            var content = Ui.Row(5, dot, Ui.Text(provider.DisplayName, 12, isActive ? p.Primary : p.Secondary, FontWeights.SemiBold));
-            if (labels[provider.Id] is { } label)
-            {
-                var labelText = Ui.Text(label, 11, p.Secondary);
-                labelText.VerticalAlignment = VerticalAlignment.Center;
-                Ui.Add(content, labelText, 4);
-            }
+            var kind = provider.Kind;
+            var isActive = kind == selectedKind;
+            // Der Punkt zeigt das knappste sichtbare Konto des Anbieters.
+            var severity = store.TightestOf(kind)?.Window.Severity;
+            var content = Ui.Row(5, Dot(severity), Ui.Text(provider.DisplayName, 12, isActive ? p.Primary : p.Secondary, FontWeights.SemiBold));
             var tab = new Border
             {
                 Padding = new Thickness(10, 7, 10, 7),
@@ -153,19 +175,19 @@ public sealed class PopupView
                 BorderBrush = isActive ? p.Accent : Brushes.Transparent,
                 Child = content,
             };
-            var id = provider.Id;
-            Ui.Add(row, Ui.Clickable(tab, () => Update(() => selectedId = id)), 2);
+            Ui.Add(row, Ui.Clickable(tab, () => Update(() => SelectKind(kind))), 2);
         }
 
-        var overflow = providers.Skip(visibleCount).ToList();
+        // „+n“ nur für Anbieter, nie für Konten.
+        var overflow = kinds.Skip(visibleCount).ToList();
         if (overflow.Count > 0)
         {
             var menu = new ContextMenu();
             foreach (var provider in overflow)
             {
-                var id = provider.Id;
-                var item = new MenuItem { Header = labels[provider.Id] is { } label ? $"{provider.DisplayName} · {label}" : provider.DisplayName };
-                item.Click += (_, _) => Update(() => selectedId = id);
+                var kind = provider.Kind;
+                var item = new MenuItem { Header = provider.DisplayName };
+                item.Click += (_, _) => Update(() => SelectKind(kind));
                 menu.Items.Add(item);
             }
             var more = new Border { Padding = new Thickness(10, 7, 10, 9), Child = Ui.Text($"+{overflow.Count}", 11.5, p.Secondary) };
@@ -180,15 +202,63 @@ public sealed class PopupView
         return row;
     }
 
+    /// <summary>Zustandspunkt: Farbe des knappsten Limits, grau ohne Stand.</summary>
+    System.Windows.Shapes.Ellipse Dot(Severity? severity) => new()
+    {
+        Width = 5, Height = 5, VerticalAlignment = VerticalAlignment.Center,
+        Fill = severity is { } s ? Palette.SeverityBrush(s) : Palette.Secondary,
+        Opacity = severity is null ? 0.4 : 1,
+    };
+
+    /// <summary>
+    /// Kontoleiste unter den Anbieter-Tabs (nur „Limits“, ab zwei Konten): Chips mit Zustandspunkt und
+    /// ungekürzter Bezeichnung, die Leiste bricht um.
+    /// </summary>
+    UIElement AccountBar(List<AccountEntry> accounts, string currentId)
+    {
+        var p = Palette;
+        var bar = new WrapPanel { Margin = new Thickness(Inset, 8, Inset - 6, 4) };
+        foreach (var entry in accounts)
+        {
+            var isSelected = entry.Id == currentId;
+            var faulty = IsFaulty(entry);
+            var severity = faulty ? null : store.State(entry.Id).Snapshot?.TightestWindow?.Severity;
+            var name = store.Label(entry.Provider) ?? entry.Provider.DisplayName;
+            var text = Ui.Wrapped(faulty ? $"{name} !" : name, 11.5, faulty ? p.Secondary : isSelected ? p.Primary : p.Secondary);
+            text.FontWeight = isSelected ? FontWeights.SemiBold : FontWeights.Normal;
+            text.VerticalAlignment = VerticalAlignment.Center;
+            text.Margin = new Thickness(6, 0, 0, 0);
+            var dot = Dot(severity);
+            DockPanel.SetDock(dot, Dock.Left);
+            // DockPanel statt StackPanel: Der Name bekommt die Restbreite und darf umbrechen.
+            var content = new DockPanel { LastChildFill = true };
+            content.Children.Add(dot);
+            content.Children.Add(text);
+            var chip = new Border
+            {
+                CornerRadius = new CornerRadius(11),
+                BorderThickness = new Thickness(1),
+                BorderBrush = isSelected ? p.Accent : p.Separator,
+                Background = isSelected ? p.Control : Brushes.Transparent,
+                Padding = new Thickness(9, 3, 10, 4),
+                Child = content,
+            };
+            var clickable = Ui.Clickable(chip, () => Update(() => SelectAccount(entry)), store.Title(entry.Provider));
+            clickable.Margin = new Thickness(0, 0, 6, 6);
+            bar.Children.Add(clickable);
+        }
+        return bar;
+    }
+
     UIElement EmptyState()
     {
         var p = Palette;
-        var hint = Ui.Wrapped("Token Stats sucht nach der Antigravity-CLI (%USERPROFILE%\\.gemini\\antigravity-cli), "
-                              + "Claude Code (%USERPROFILE%\\.claude), Codex (%USERPROFILE%\\.codex) und Ollama (%USERPROFILE%\\.ollama).",
+        var hint = Ui.Wrapped("Melde dich in Claude Code oder Codex an. Weitere Ordner fügst du in den Einstellungen unter „Konten“ hinzu.",
                               11, p.Secondary);
         hint.TextAlignment = TextAlignment.Center;
-        var title = Ui.Text("Kein Anbieter gefunden", 12.5, p.Primary, FontWeights.SemiBold);
-        title.HorizontalAlignment = HorizontalAlignment.Center;
+        var title = Ui.Wrapped("Kein Konto gefunden", 12.5, p.Primary);
+        title.FontWeight = FontWeights.SemiBold;
+        title.TextAlignment = TextAlignment.Center;
         var column = Ui.Column(6, title, hint);
         column.Margin = new Thickness(24);
         return column;
@@ -212,10 +282,17 @@ public sealed class PopupView
                     HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
                 },
             };
-            var label = Ui.Text(name, 11.5, p.Primary, FontWeights.SemiBold);
+            var label = Ui.Wrapped(name, 11.5, p.Primary);
+            label.FontWeight = FontWeights.SemiBold;
             label.VerticalAlignment = VerticalAlignment.Center;
-            left = Ui.Row(7, avatar, label);
-            ((FrameworkElement)left).Margin = new Thickness(4, 0, 4, 0);
+            label.Margin = new Thickness(7, 0, 0, 0);
+            avatar.VerticalAlignment = VerticalAlignment.Center;
+            DockPanel.SetDock(avatar, Dock.Left);
+            // Ungekürzt: Der Name nimmt die Restbreite und bricht notfalls um.
+            var dock = new DockPanel { LastChildFill = true, Margin = new Thickness(4, 0, 4, 0) };
+            dock.Children.Add(avatar);
+            dock.Children.Add(label);
+            left = dock;
         }
 
         var right = Ui.Row(8);
@@ -258,20 +335,15 @@ public sealed class PopupView
         return Ui.Clickable(border, action, help);
     }
 
-    static string? Shorten(string? label) =>
-        label is { Length: > MaxLabelLength } ? label[..(MaxLabelLength - 1)] + "…" : label;
-
-    /// <summary>Wie viele Tabs in die Breite passen – gemessen statt fest, weil Konten-Tabs länger sind.</summary>
-    static int VisibleTabCount(List<(string Title, string? Label)> titles)
+    /// <summary>Wie viele Anbieter-Tabs in die Breite passen – gemessen statt fest.</summary>
+    static int VisibleTabCount(List<string> titles)
     {
         const double available = Width - 2 * (Inset - 10);
         const double overflowWidth = 40;
         static double Measure(string text, double size, FontWeight weight) =>
             new FormattedText(text, Format.Culture, FlowDirection.LeftToRight,
                 new Typeface(Ui.Font, FontStyles.Normal, weight, FontStretches.Normal), size, Brushes.Black, 1.0).WidthIncludingTrailingWhitespace;
-        var widths = titles.Select(t =>
-            Math.Ceiling(Measure(t.Title, 12, FontWeights.SemiBold) + (t.Label is { } label ? 4 + Measure(label, 11, FontWeights.Normal) : 0))
-            + 5 + 5 + 20 + 2).ToList();
+        var widths = titles.Select(title => Math.Ceiling(Measure(title, 12, FontWeights.SemiBold)) + 5 + 5 + 20 + 2).ToList();
         if (widths.Sum() <= available) return titles.Count;
         double used = 0;
         var count = 0;
@@ -286,31 +358,34 @@ public sealed class PopupView
 
     // Seiten „Limits“ und „Verbrauch“
 
-    UIElement ProviderPage(IUsageProvider provider)
+    UIElement ProviderPage(AccountEntry entry)
     {
         var p = Palette;
+        var provider = entry.Provider;
         var state = store.State(provider.Id);
         var column = Ui.Column(16);
         column.Margin = new Thickness(Inset, 16, Inset, 18);
 
-        var accountCount = store.AccountsOfKind(provider.Kind).Count;
-        var title = Ui.Row(8, Ui.Text(page == PopupPage.Usage ? provider.DisplayName : store.Title(provider), 13, p.Primary, FontWeights.Bold));
-        if (page == PopupPage.Usage && accountCount > 1)
+        // „Verbrauch“ gilt je Anbieter und zählt nur Konten, deren Logs gelesen werden.
+        var polledAccounts = store.PolledAccountsOfKind(provider.Kind);
+        var accountCount = polledAccounts.Count;
+        // WrapPanel: „Claude · Kunde A“ darf zweizeilig werden, der Plan rutscht dann nach unten.
+        var title = new WrapPanel();
+        var titleText = Ui.Wrapped(page == PopupPage.Usage ? provider.DisplayName : store.Title(provider), 13, p.Primary);
+        titleText.FontWeight = FontWeights.Bold;
+        titleText.VerticalAlignment = VerticalAlignment.Center;
+        title.Children.Add(titleText);
+        var detail = page == PopupPage.Usage && accountCount > 1 ? $"{accountCount} Konten" : state.Snapshot?.Account?.Plan;
+        if (detail is not null)
         {
-            var countText = Ui.Text($"{accountCount} Konten", 11, p.Secondary);
-            countText.FontFamily = new FontFamily("Cascadia Mono, Consolas");
-            countText.VerticalAlignment = VerticalAlignment.Center;
-            Ui.Add(title, countText, 8);
-        }
-        else if (state.Snapshot?.Account?.Plan is { } plan)
-        {
-            var planText = Ui.Text(plan, 11, p.Secondary);
-            planText.FontFamily = new FontFamily("Cascadia Mono, Consolas");
-            planText.VerticalAlignment = VerticalAlignment.Center;
-            Ui.Add(title, planText, 8);
+            var detailText = Ui.Text(detail, 11, p.Secondary);
+            detailText.FontFamily = new FontFamily("Cascadia Mono, Consolas");
+            detailText.VerticalAlignment = VerticalAlignment.Center;
+            detailText.Margin = new Thickness(8, 0, 0, 0);
+            title.Children.Add(detailText);
         }
         UIElement? chip = null;
-        if (page == PopupPage.Limits && state.Snapshot?.TightestWindow is { } tightest)
+        if (page == PopupPage.Limits && !IsFaulty(entry) && state.Snapshot?.TightestWindow is { } tightest)
         {
             var color = p.SeverityBrush(tightest.Severity);
             chip = new Border
@@ -320,18 +395,22 @@ public sealed class PopupView
                 Child = Ui.Text(Format.Percent(tightest.Percent), 10.5, color, FontWeights.SemiBold),
             };
         }
-        Ui.Add(column, Ui.Spread(title, chip), 16);
+        Ui.Add(column, Ui.Spread(title, chip, VerticalAlignment.Top), 16);
 
         if (page == PopupPage.Usage)
         {
             // Abo-Preis aller Konten zusammen – zwei Max-Abos sind 400 $, nicht 200 $.
-            var prices = store.AccountsOfKind(provider.Kind)
+            var prices = polledAccounts
                 .Select(account => SubscriptionPrice.Dollars(provider.Kind, store.State(account.Id).Snapshot?.Account?.Plan))
                 .OfType<int>().ToList();
             var view = new UsageView(Palette, consumption, provider.Kind, settings.ShowMoney,
                                      prices.Count > 0 ? prices.Sum() : null, period,
-                                     selectedPeriod => Update(() => period = selectedPeriod), accountCount);
+                                     selectedPeriod => Update(() => period = selectedPeriod), Math.Max(accountCount, 1));
             Ui.Add(column, view.Build(), 16);
+        }
+        else if (AccountProblem(entry) is { } problem)
+        {
+            Ui.Add(column, problem, 16);
         }
         else
         {
@@ -339,6 +418,46 @@ public sealed class PopupView
                 Ui.Add(column, element, 16);
         }
         return column;
+    }
+
+    /// <summary>
+    /// Seite eines Kontos, das sich nicht abfragen lässt (fehlender Ordner, Codex ohne Anmeldung) oder
+    /// ohne Stand nur Fehler liefert: Hinweis und „Einstellungen öffnen“ statt leerer Balken.
+    /// </summary>
+    UIElement? AccountProblem(AccountEntry entry)
+    {
+        var p = Palette;
+        var state = store.State(entry.Id);
+        var folder = entry.Source.FolderDisplay ?? "";
+        var kind = entry.Kind == "codex" ? AccountDiscovery.FolderKind.Codex : AccountDiscovery.FolderKind.Claude;
+        string text;
+        Severity severity;
+        if (entry.Status == AccountStatus.MissingFolder)
+            (text, severity) = ($"Ordner nicht gefunden: {folder}. Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.", Severity.Crit);
+        else if (entry.Status == AccountStatus.NotSignedIn && !entry.CanFetch)
+            // Im Befehl der volle Pfad wie in den übrigen Windows-Hinweisen – PowerShell kennt kein %USERPROFILE%.
+            (text, severity) = (kind.NotSignedInHint(entry.Source.Folder ?? ""), Severity.Warn);
+        else if (state.Snapshot is null && state.Error is { } error && !state.IsRateLimited)
+            (text, severity) = (error, Severity.Crit);
+        else
+            return null;
+
+        var color = p.SeverityBrush(severity);
+        var icon = Ui.Icon("\uE7BA", 11, color);
+        icon.VerticalAlignment = VerticalAlignment.Top;
+        icon.Margin = new Thickness(0, 2, 0, 0);
+        var label = Ui.Wrapped(text, 11, color);
+        label.Margin = new Thickness(6, 0, 0, 0);
+        var hint = new Grid();
+        hint.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        hint.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        Grid.SetColumn(label, 1);
+        hint.Children.Add(icon);
+        hint.Children.Add(label);
+
+        var button = FooterButton(Ui.Text("Einstellungen öffnen", 11.5, p.Primary, FontWeights.SemiBold), "Einstellungen öffnen", openSettings);
+        if (button is FrameworkElement element) element.HorizontalAlignment = HorizontalAlignment.Left;
+        return Ui.Column(12, hint, button);
     }
 
     IEnumerable<UIElement> Limits(UsageStore.ProviderState state, bool isLoading)

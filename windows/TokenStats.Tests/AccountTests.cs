@@ -18,7 +18,7 @@ public sealed class AccountTests : IDisposable
     {
         var folder = Directory.CreateDirectory(Path.Combine(home, name)).FullName;
         File.WriteAllText(Path.Combine(folder, ".claude.json"),
-            $$$"""{"oauthAccount":{"accountUuid":"{{{uuid}}}","emailAddress":"{{{email}}}","displayName":"Frank"}}""");
+            $$$"""{"oauthAccount":{"accountUuid":"{{{uuid}}}","emailAddress":"{{{email}}}","displayName":"Privat"}}""");
         return folder;
     }
 
@@ -51,22 +51,166 @@ public sealed class AccountTests : IDisposable
 
         var found = new AccountDiscovery(home).Accounts(AccountDiscovery.FolderKind.Claude);
         Assert.Equal(3, found.Count);
-        Assert.True(found[0].IsDefaultAccount);
+        Assert.True(found[0].Provider.IsDefaultAccount);
         Assert.Equal(["second@example.com", "work@example.com"], found.Skip(1).Select(p => p.Source.Email).Order());
         Assert.All(found.Skip(1), p => Assert.Equal(AccountOrigin.Detected, p.Source.Origin));
+        Assert.All(found.Skip(1), p => Assert.Equal(AccountStatus.Ok, p.Status));
     }
 
     [Fact]
-    public void SkipsDuplicateLoginsAndKeepsManualFolders()
+    public void MarksDuplicateLoginsInsteadOfDroppingThem()
     {
-        ClaudeFolder(".claude-2", "u-2", "second@example.com");
-        var copy = ClaudeFolder(Path.Combine("elsewhere", "claude-copy"), "u-2", "second@example.com");
-        var manual = ClaudeFolder(Path.Combine("elsewhere", "claude-firma"), "u-9", "firma@example.com");
+        ClaudeFolder(".claude-2", "u-2", "privat@example.com");
+        var copy = ClaudeFolder(Path.Combine("elsewhere", "claude-copy"), "u-2", "privat@example.com");
+        var manual = ClaudeFolder(Path.Combine("elsewhere", "claude-kunde"), "u-9", "kunde-a@example.com");
 
+        // Derselbe Ordner zweimal in den Einstellungen ist ein Eintrag, kein Doppel.
         var folders = new Dictionary<string, List<string>> { ["claude"] = [copy, manual, manual] };
         var found = new AccountDiscovery(home, folders).Accounts(AccountDiscovery.FolderKind.Claude).Skip(1).ToList();
-        Assert.Equal(["second@example.com", "firma@example.com"], found.Select(p => p.Source.Email));
+        Assert.Equal(["privat@example.com", "privat@example.com", "kunde-a@example.com"], found.Select(p => p.Source.Email));
+        Assert.Equal([AccountStatus.Ok, AccountStatus.Duplicate, AccountStatus.Ok], found.Select(p => p.Status));
+        Assert.Equal(found[0].Id, found[1].DuplicateOf);
+        Assert.False(found[1].CanFetch);
         Assert.Equal(AccountOrigin.Manual, found[^1].Source.Origin);
+    }
+
+    [Fact]
+    public void SameFolderTwiceIsDuplicateOfFirst()
+    {
+        var detected = ClaudeFolder(".claude-arbeit", "u-4", "arbeit@example.com");
+        // Von Hand derselbe Ordner wie der automatisch gefundene, einmal mit „\“ am Ende.
+        var folders = new Dictionary<string, List<string>> { ["claude"] = [detected + Path.DirectorySeparatorChar] };
+        var found = new AccountDiscovery(home, folders).Accounts(AccountDiscovery.FolderKind.Claude).Skip(1).ToList();
+
+        Assert.Equal(2, found.Count);
+        Assert.Equal(AccountStatus.Ok, found[0].Status);
+        Assert.Equal(AccountOrigin.Detected, found[0].Source.Origin);
+        Assert.Equal(AccountStatus.Duplicate, found[1].Status);
+        Assert.Equal(AccountOrigin.Manual, found[1].Source.Origin);
+        Assert.Equal(found[0].Id, found[1].DuplicateOf);
+    }
+
+    [Fact]
+    public void MissingManualFolderStaysListed()
+    {
+        var gone = Path.Combine(home, "laufwerk", "claude-kunde");
+        var folders = new Dictionary<string, List<string>> { ["claude"] = [gone] };
+        var discovery = new AccountDiscovery(home, folders);
+        var entry = Assert.Single(discovery.Accounts(AccountDiscovery.FolderKind.Claude), e => e.Source.Origin == AccountOrigin.Manual);
+
+        Assert.Equal(AccountStatus.MissingFolder, entry.Status);
+        Assert.True(entry.IsListed);
+        Assert.False(entry.CanFetch);
+
+        // Im Popup sichtbar (grau mit „!“), aber nicht abgefragt und nicht im Verbrauch.
+        var store = new UsageStore([], new AppSettings(), cachePath: null, () => discovery.Accounts(AccountDiscovery.FolderKind.Claude));
+        Assert.Contains(store.VisibleEntries, e => e.Id == entry.Id);
+        Assert.DoesNotContain(store.PolledProviders, p => p.Id == entry.Id);
+        Assert.DoesNotContain(Path.Combine(gone, "projects"), store.LogRoots.Claude);
+
+        // Ist das Laufwerk wieder da, ist es ein normales Konto.
+        ClaudeFolder(Path.Combine("laufwerk", "claude-kunde"), "u-5", "kunde-a@example.com");
+        store.ReloadAccounts();
+        Assert.Equal(AccountStatus.Ok, store.Entries.Single(e => e.Id == entry.Id).Status);
+        Assert.Contains(store.PolledProviders, p => p.Id == entry.Id);
+    }
+
+    [Fact]
+    public void ManualFoldersWithoutLoginAreNotSignedIn()
+    {
+        var codex = Directory.CreateDirectory(Path.Combine(home, "elsewhere", "codex-arbeit")).FullName;
+        var claude = Directory.CreateDirectory(Path.Combine(home, "elsewhere", "claude-arbeit")).FullName;
+        var folders = new Dictionary<string, List<string>> { ["codex"] = [codex], ["claude"] = [claude] };
+        var discovery = new AccountDiscovery(home, folders);
+
+        var codexEntry = Assert.Single(discovery.Accounts(AccountDiscovery.FolderKind.Codex), e => e.Source.Origin == AccountOrigin.Manual);
+        Assert.Equal(AccountStatus.NotSignedIn, codexEntry.Status);
+        Assert.True(codexEntry.IsListed);
+        Assert.False(codexEntry.CanFetch);   // ohne auth.json keine Abfrage
+
+        // Claude ohne .claude.json wird trotzdem abgefragt: Die Anmeldung kann woanders liegen.
+        var claudeEntry = Assert.Single(discovery.Accounts(AccountDiscovery.FolderKind.Claude), e => e.Source.Origin == AccountOrigin.Manual);
+        Assert.Equal(AccountStatus.NotSignedIn, claudeEntry.Status);
+        Assert.True(claudeEntry.CanFetch);
+
+        var store = new UsageStore([], new AppSettings(), cachePath: null,
+            () => discovery.Accounts(AccountDiscovery.FolderKind.Codex).Concat(discovery.Accounts(AccountDiscovery.FolderKind.Claude)).ToList());
+        Assert.Contains(store.VisibleEntries, e => e.Id == codexEntry.Id);
+        Assert.DoesNotContain(store.PolledProviders, p => p.Id == codexEntry.Id);
+        Assert.DoesNotContain(codex, store.LogRoots.Codex);
+        Assert.Contains(store.PolledProviders, p => p.Id == claudeEntry.Id);
+    }
+
+    [Fact]
+    public void NotSignedInHintUsesPowerShell()
+    {
+        Assert.Equal("Keine Anmeldung in diesem Ordner. Im Terminal »$env:CLAUDE_CONFIG_DIR=\"C:\\Daten\\claude-arbeit\"; claude« starten.",
+                     AccountDiscovery.FolderKind.Claude.NotSignedInHint(@"C:\Daten\claude-arbeit"));
+        Assert.Equal("Keine Anmeldung in diesem Ordner. Im Terminal »$env:CODEX_HOME=\"C:\\Daten\\codex-arbeit\"; codex login« starten.",
+                     AccountDiscovery.FolderKind.Codex.NotSignedInHint(@"C:\Daten\codex-arbeit"));
+    }
+
+    [Fact]
+    public void HiddenAccountsAreNeitherVisibleNorPolled()
+    {
+        var folder = ClaudeFolder(".claude-privat", "u-6", "privat@example.com");
+        var settings = new AppSettings();
+        var discovery = new AccountDiscovery(home);
+        var store = new UsageStore([], settings, cachePath: null, () => discovery.Accounts(AccountDiscovery.FolderKind.Claude));
+        var id = new ClaudeProvider(folder).Id;
+        Assert.Contains(store.PolledProviders, p => p.Id == id);
+
+        settings.SetHidden(id, true);
+        Assert.DoesNotContain(store.VisibleEntries, e => e.Id == id);
+        Assert.DoesNotContain(store.PolledProviders, p => p.Id == id);
+    }
+
+    [Fact]
+    public void LabelIsLimitedWhenSaved()
+    {
+        var settings = new AppSettings();
+        settings.SetAccountLabel("claude", "  Kunde A Niederlassung Süd und Nord  ");
+        Assert.Equal("Kunde A Niederlassung Sü", settings.AccountLabels["claude"]);
+        Assert.Equal(AppSettings.MaxAccountLabelLength, settings.AccountLabels["claude"].Length);
+
+        settings.SetAccountLabel("claude", " Privat ");
+        Assert.Equal("Privat", settings.AccountLabels["claude"]);
+        settings.SetAccountLabel("claude", "   ");
+        Assert.False(settings.AccountLabels.ContainsKey("claude"));
+    }
+
+    [Fact]
+    public void AddingTheSameFolderTwiceStoresItOnce()
+    {
+        var settings = new AppSettings();
+        var folder = Path.Combine(home, "elsewhere", "claude-arbeit");
+        settings.AddAccountFolder("claude", folder);
+        settings.AddAccountFolder("claude", folder + Path.DirectorySeparatorChar);
+        Assert.Single(settings.AccountFolders["claude"]);
+
+        settings.RemoveAccountFolder("claude", folder);
+        Assert.False(settings.AccountFolders.ContainsKey("claude"));
+    }
+
+    [Fact]
+    public void AutomaticLabelNamesItsOrigin()
+    {
+        Assert.Equal(new AutoLabel("arbeit", LabelOrigin.Email), new AccountSource { Email = "arbeit@example.com", Name = "Arbeit" }.AutomaticLabelInfo);
+        Assert.Equal(new AutoLabel("Kunde A", LabelOrigin.Name), new AccountSource { Name = "Kunde A" }.AutomaticLabelInfo);
+        Assert.Equal(new AutoLabel("claude-privat", LabelOrigin.Folder), new AccountSource { Folder = Path.Combine(home, ".claude-privat") }.AutomaticLabelInfo);
+        Assert.Null(new AccountSource().AutomaticLabelInfo);
+
+        Assert.Equal("aus der E-Mail", LabelOrigin.Email.Description());
+        Assert.Equal("aus dem Kontonamen", LabelOrigin.Name.Description());
+        Assert.Equal("aus dem Ordnernamen", LabelOrigin.Folder.Description());
+
+        // Eine eigene Bezeichnung geht vor, die automatische bleibt für den Platzhalter.
+        var settings = new AppSettings();
+        var provider = new ClaudeProvider(ClaudeFolder(".claude-kunde", "u-7", "kunde-a@example.com"));
+        var store = new UsageStore([provider], settings, cachePath: null);
+        settings.SetAccountLabel(provider.Id, "Kunde A");
+        Assert.Equal("Kunde A", store.Label(provider));
+        Assert.Equal(new AutoLabel("kunde-a", LabelOrigin.Email), store.AutomaticLabel(provider));
     }
 
     [Fact]
