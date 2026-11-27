@@ -483,8 +483,7 @@ public struct LimitsWidgetView: View {
         case .large:
             VStack(alignment: .leading, spacing: 12) {
                 if snapshot.providers.allSatisfy({ $0.snapshot == nil }) {
-                    WidgetHeader(title: "Limits", detail: nil, severity: nil)
-                    noData(snapshot.providers.first)
+                    headedNote(WidgetHeader(title: "Limits", detail: nil, severity: nil), noDataText(snapshot.providers.first))
                 } else {
                     large(snapshot)
                 }
@@ -508,15 +507,14 @@ public struct LimitsWidgetView: View {
                         }
                     }
                 } else if let shown {
-                    WidgetHeader(title: shown.name, detail: nil, severity: nil, selection: selectionDetail)
-                    noData(shown)
+                    headedNote(WidgetHeader(title: shown.name, detail: nil, severity: nil, selection: selectionDetail),
+                               noDataText(shown))
                 } else if let provider {
                     // Gewähltes Konto steht nicht im Stand: beim Namen nennen, nie als `claude@…`.
-                    WidgetHeader(title: LimitsAccounts.choice(for: provider, in: snapshot).title, detail: nil, severity: nil)
-                    note(LimitsAccounts.missingMessage)
+                    headedNote(WidgetHeader(title: LimitsAccounts.choice(for: provider, in: snapshot).title, detail: nil, severity: nil),
+                               LimitsAccounts.missingMessage)
                 } else {
-                    WidgetHeader(title: "Limits", detail: nil, severity: nil)
-                    noData(nil)
+                    headedNote(WidgetHeader(title: "Limits", detail: nil, severity: nil), noDataText(nil))
                 }
                 Spacer(minLength: 0)
                 MachineFooter(snapshot: snapshot)
@@ -526,7 +524,25 @@ public struct LimitsWidgetView: View {
     }
 
     private func noData(_ provider: WidgetSnapshot.Provider?) -> some View {
-        note(provider?.message ?? "Noch kein Stand – Token Stats fragt beim nächsten Takt ab.")
+        note(noDataText(provider))
+    }
+
+    private func noDataText(_ provider: WidgetSnapshot.Provider?) -> String {
+        provider?.message ?? "Noch kein Stand – Token Stats fragt beim nächsten Takt ab."
+    }
+
+    /// Kopf und Hinweis mit Ausweichstufen (`CommandSplit.shortVariants`): Passt der volle Satz
+    /// nicht in die Kachel, steht der kürzere da – nie ragt Text in den unteren Innenrand
+    /// (Designer-Prüfung PR #5, Runde 4: „keine Anmeldung“ in der kleinsten Kachel).
+    private func headedNote(_ header: WidgetHeader, _ text: String) -> some View {
+        ViewThatFits(in: .vertical) {
+            ForEach(CommandSplit.shortVariants(text), id: \.self) { variant in
+                VStack(alignment: .leading, spacing: 8) {
+                    header
+                    note(variant)
+                }
+            }
+        }
     }
 
     /// Großes Widget, alle sichtbaren Konten: erst Abschnitte mit allen Limits, passt das

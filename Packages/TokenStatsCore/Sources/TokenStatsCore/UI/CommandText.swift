@@ -28,6 +28,30 @@ public enum CommandSplit {
         if !tail.isEmpty { parts.append(.text(tail)) }
         return parts
     }
+
+    /// Ausweichstufen eines Hinweises für enge Flächen (Widget, Designer-Prüfung PR #5,
+    /// Runde 4): der volle Text; der erste Satz mit „Im Terminal starten:“ und den Befehlen;
+    /// nur der erste Satz. Nie abgeschnitten – passt eine Stufe nicht, nimmt die Fläche die
+    /// nächste. „Keine Anmeldung in diesem Ordner.“ wird dabei zu „Keine Anmeldung.“.
+    public static func shortVariants(_ text: String) -> [String] {
+        let parts = parts(text)
+        let commands = parts.compactMap { part -> String? in
+            if case .command(let command) = part { return command }
+            return nil
+        }
+        guard case .text(let lead)? = parts.first else { return [text] }
+        var first = lead
+        if let end = lead.range(of: ". ") { first = String(lead[..<end.lowerBound]) + "." }
+        if !first.hasSuffix(".") && !first.hasSuffix(":") { first += "." }
+        first = first.replacingOccurrences(of: "Keine Anmeldung in diesem Ordner.", with: "Keine Anmeldung.")
+        var variants = [text]
+        if !commands.isEmpty {
+            variants.append(([first, "Im Terminal starten:"] + commands.map { "»\($0)«" }).joined(separator: " "))
+        }
+        variants.append(first)
+        var seen = Set<String>()
+        return variants.filter { seen.insert($0).inserted }
+    }
 }
 
 /// Text mit Befehlszeilen (`CommandSplit`). Schrift, Farbe und Größe erbt er vom Umfeld.

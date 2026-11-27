@@ -144,6 +144,22 @@ import Testing
         #expect(CommandSplit.parts("Offen »ohne Ende") == [.text("Offen »ohne Ende")], "ohne schließendes « kein Befehl")
     }
 
+    @Test func notesHaveShorterVariants() {
+        // Runde 4: „keine Anmeldung“ ragte in der kleinsten Kachel in den unteren Innenrand.
+        let notSignedIn = "Keine Anmeldung in diesem Ordner. Im Terminal »CLAUDE_CONFIG_DIR=~/claude-alt claude« starten."
+        #expect(CommandSplit.shortVariants(notSignedIn) == [
+            notSignedIn,
+            "Keine Anmeldung. Im Terminal starten: »CLAUDE_CONFIG_DIR=~/claude-alt claude«",
+            "Keine Anmeldung.",
+        ])
+        let missing = "Ordner nicht gefunden: /Volumes/Daten/kunde-a. Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder."
+        #expect(CommandSplit.shortVariants(missing) == [missing, "Ordner nicht gefunden: /Volumes/Daten/kunde-a."])
+        #expect(CommandSplit.shortVariants(LimitsAccounts.missingMessage).last == "Konto ausgeblendet oder Ordner fehlt.")
+        #expect(CommandSplit.shortVariants("Nicht angemeldet. »codex login« im Terminal ausführen.")[1]
+            == "Nicht angemeldet. Im Terminal starten: »codex login«")
+        #expect(CommandSplit.shortVariants("Kurz.") == ["Kurz."], "ohne kürzere Fassung nur der Text")
+    }
+
     // MARK: Datei
 
     @Test func oldWidgetFilesStayReadable() throws {
