@@ -158,6 +158,12 @@ public enum DemoAccounts {
         return "\(account.kindName) · \(label)"
     }
 
+    /// Konto mit breitem Einwort-Namen in Großbuchstaben (Designer-Prüfung PR #5, Runde 6):
+    /// 14 Zeichen, aber breiter als „kundenbetreuung-“ – prüft den gemessenen Umbruch.
+    public static func wideNameAccount(now: Date) -> Account {
+        claude(id: "claude@0b5e1a7e", "MÖBELWERKSTATT", "~/.claude-moebel", .detected, session: 0.22, week: 0.58, now: now, plan: "Pro")
+    }
+
     /// Adresse, deren lokaler Teil die automatische Bezeichnung mit 34 Zeichen ergibt.
     public static let longEmail = "kundenbetreuung-niederlassung-sued@example.com"
 

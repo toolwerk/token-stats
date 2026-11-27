@@ -48,8 +48,6 @@ struct LimitsAccountTable: View {
         var body: some View {
             HStack(alignment: .center, spacing: 8) {
                 name
-                    .font(.system(size: 11))
-                    .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if let window = row.window {
                     Group {
@@ -84,13 +82,14 @@ struct LimitsAccountTable: View {
             .frame(minHeight: 20)
         }
 
-        /// „Claude · Kunde A“: Anbieter semibold, Kontoteil regular.
-        private var name: Text {
+        /// „Claude · Kunde A“: Anbieter semibold, Kontoteil regular; Trennpunkt vorn in der
+        /// neuen Zeile, wenn „· Kunde A“ dort passt (gemessen, `TitleWrap`).
+        private var name: some View {
             let kind = row.provider.providerName
             let full = row.provider.name
             let prefix = kind + " · "
-            guard full.hasPrefix(prefix) else { return Text(full).fontWeight(.semibold) }
-            return Text(kind + " · ").fontWeight(.semibold) + Text(String(full.dropFirst(prefix.count)))
+            return WrappedTitle(full, size: 11, prefix: full.hasPrefix(prefix) ? prefix : nil,
+                                prefixWeight: .semibold, accountWeight: .regular)
         }
     }
 }

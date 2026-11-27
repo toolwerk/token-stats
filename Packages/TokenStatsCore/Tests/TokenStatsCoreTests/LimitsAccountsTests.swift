@@ -182,11 +182,53 @@ import Testing
     }
 
     @Test func separatorDotStartsTheNextLine() {
-        // Runde 5, H1: „Claude ·“ / „claude-alt“ wird zu „Claude“ / „· claude-alt“.
+        // Für die zweizeiligen Teilungen gehört „· “ zum folgenden Teil.
         #expect(WidgetHeader.breakTokens("Claude · Kunde A") == ["Claude ", "· Kunde ", "A"])
-        #expect(WidgetHeader.breakTokens("Claude · kundenbetreuung-niederlassung-sued")
-            == ["Claude · ", "kundenbetreuung-", "niederlassung-", "sued"],
-                "vor einem sehr langen Einzelwort bleibt der Punkt vorn, sonst wäre die Zeile zu breit")
+    }
+
+    // Runde 6: gemessen statt gezählt. Breiten je Zeichen frei wählbar; hier 1 je Zeichen,
+    // breite Großbuchstaben 2.
+    private func titleLines(_ text: String, _ available: CGFloat, wide: Set<Character> = []) -> [String] {
+        let characters = Array(text)
+        let widths = characters.map { wide.contains($0) ? CGFloat(2) : 1 }
+        return TitleWrap.lines(characters, widths: widths, available: available).map { String(characters[$0]) }
+    }
+
+    @Test func titleDotLeadsWhenThePartFits() {
+        #expect(titleLines("Claude · Agentur Nord", 14) == ["Claude", "· Agentur Nord"])
+        #expect(titleLines("Claude · Kunde A", 30) == ["Claude · Kunde A"], "passt in eine Zeile")
+        // Große Tabelle: nicht „Claude · Agentur“ / „Nord“, sondern am Punkt teilen.
+        #expect(titleLines("Claude · Agentur Nord", 17) == ["Claude", "· Agentur Nord"])
+        #expect(titleLines("Claude · Kunde Schmidt Beratung", 18) == ["Claude · Kunde", "Schmidt Beratung"],
+                "passt „· Konto“ nicht in eine Zeile, normaler Umbruch")
+    }
+
+    @Test func titleDotStaysWhenTheWordIsTooWide() {
+        // „MÖBELWERKSTATT“: 14 Zeichen, aber breit (28). „· MÖBELWERKSTATT“ (30) passt nicht in
+        // 29, das Wort allein schon – der Punkt bleibt am Ende der Vorzeile.
+        let caps = Set("MÖBELWERKSTAT")
+        #expect(titleLines("Claude · MÖBELWERKSTATT", 29, wide: caps) == ["Claude ·", "MÖBELWERKSTATT"])
+        #expect(titleLines("Claude · MÖBELWERKSTATT", 30, wide: caps) == ["Claude", "· MÖBELWERKSTATT"], "passt es, führt der Punkt")
+        // Ist das Wort allein zu breit, bricht es als letzter Ausweg zeichenweise.
+        #expect(titleLines("Claude · MÖBELWERKSTATT", 20, wide: caps) == ["Claude ·", "MÖBELWERKS", "TATT"])
+        // „kundenbetreuung-“ ist schmaler: dort führt der Punkt.
+        #expect(titleLines("Claude · kundenbetreuung-niederlassung-sued", 18)
+            == ["Claude", "· kundenbetreuung-", "niederlassung-sued"])
+    }
+
+    @Test func titleNeverWiderThanAvailable() {
+        let caps = Set("MÖBELWERKSTAT")
+        for available in stride(from: CGFloat(6), through: 40, by: 1) {
+            for text in ["Claude · MÖBELWERKSTATT", "Claude · Kunde Schmidt Beratung", "Claude · kundenbetreuung-niederlassung-sued"] {
+                let characters = Array(text)
+                let widths = characters.map { caps.contains($0) ? CGFloat(2) : 1 }
+                let lines = TitleWrap.lines(characters, widths: widths, available: available)
+                #expect(lines.allSatisfy { $0.map { widths[$0] }.reduce(0, +) <= available || $0.count == 1 },
+                        "\(text) bei \(available)")
+                #expect(lines.map { String(characters[$0]) }.joined().replacingOccurrences(of: " ", with: "")
+                    == text.replacingOccurrences(of: " ", with: ""), "nichts geht verloren")
+            }
+        }
     }
 
     // MARK: Datei

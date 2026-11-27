@@ -99,16 +99,16 @@ struct WidgetHeader: View {
             // „ · “ und Leerzeichen; nie mitten im Wort und nie breiter als die Kachel – sonst
             // drückt eine zu lange Detailzeile („Max 20× · +2 Limits“) den Inhalt an den rechten
             // Rand (Designer-Prüfung PR #5, Runde 3).
-            let accountFirst = selection != nil && kind != nil && account != nil
+            // Wie Stufe S6–S8 des Entwurfs: im letzten Ausweg ist der Kontoname der Titel, „Claude · Tarif“
+            // steht in der Detailzeile – das spart eine Titelzeile (z. B. „MÖBELWERKSTATT“).
+            let accountFirst = kind != nil && account != nil
             // Der Punkt steht hier rechts in der ersten Detailzeile (wie Stufe S7), damit der
             // Titel die volle Breite hat – sonst ragte „· kundenbetreuung-“ in den Innenrand.
             row(dot: false) {
                 VStack(alignment: .leading, spacing: 1) {
-                    TokenFlow(spacing: 0) {
-                        ForEach(Array(Self.breakTokens(accountFirst ? account! : title).enumerated()), id: \.offset) { _, token in
-                            Text(token).font(Self.titleFont).lineLimit(1).fixedSize()
-                        }
-                    }
+                    // Gemessener Umbruch: Trennpunkt vorn, wenn „· Name“ passt, sonst am Zeilenende;
+                    // zu breite Einzelwörter („MÖBELWERKSTATT“) brechen zuletzt zeichenweise.
+                    WrappedTitle(accountFirst ? account! : title, size: 12)
                     let details = (accountFirst ? [selection, [kind!, detail].compactMap { $0 }.joined(separator: " · ")] : [selection, detail])
                         .compactMap { $0?.nilIfEmpty }
                     ForEach(details.indices, id: \.self) { index in
@@ -135,8 +135,11 @@ struct WidgetHeader: View {
     /// Stellen, an denen eine Detailzeile umbrechen darf: nach „ · “, sonst nach Leerzeichen,
     /// wobei „+2 Limits“ und „Max 20×“ zusammenbleiben.
     static func detailTokens(_ text: String) -> [String] {
+        // Der Trennpunkt beginnt den nächsten Teil („Max 20×“ / „· +2 Limits“), wie im Titel.
         let parts = text.components(separatedBy: " · ")
-        return parts.enumerated().map { index, part in index == parts.count - 1 ? part : part + " · " }
+        return parts.enumerated().map { index, part in
+            (index == 0 ? "" : "· ") + part + (index == parts.count - 1 ? "" : " ")
+        }
     }
 
     private func row(alignment: VerticalAlignment = .top, dot: Bool, @ViewBuilder _ content: () -> some View) -> some View {
@@ -249,19 +252,13 @@ struct WidgetHeader: View {
             }
         }
         if !current.isEmpty { tokens.append(current) }
-        // Der Trennpunkt beginnt die neue Zeile („Claude“ / „· Kunde A“). Nur vor einem sehr
-        // langen Einzelwort (über 14 Zeichen) bleibt er am Ende der Vorzeile, sonst wäre
-        // „· kundenbetreuung-“ breiter als die kleine Kachel.
+        // Der Trennpunkt gehört zum folgenden Teil („· Kunde “) – für die zweizeiligen Teilungen.
+        // Den freien Umbruch mit Messung übernimmt `TitleWrap`.
         var merged: [String] = []
         var pending = ""
         for token in tokens {
             if token == "· " { pending += token; continue }
-            if !pending.isEmpty, token.count > 14, !merged.isEmpty {
-                merged[merged.count - 1] += pending
-                merged.append(token)
-            } else {
-                merged.append(pending + token)
-            }
+            merged.append(pending + token)
             pending = ""
         }
         if !pending.isEmpty { merged.append(pending) }
