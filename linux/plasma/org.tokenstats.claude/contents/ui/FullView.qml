@@ -176,8 +176,12 @@ ColumnLayout {
                             : (view.info && view.info.error ? [{ kind: "text", text: view.info.error }] : [])
                 if (!warning.length) return [{ kind: "text", text: stand }]
                 var prefix = stand + "  ·  ⚠"
-                if (warning[0].kind === "text")
-                    return [{ kind: "text", text: prefix + " " + warning[0].text }].concat(warning.slice(1))
+                if (warning[0].kind === "text") {
+                    var first = { kind: "text", text: prefix + " " + warning[0].text }
+                    if (warning[0].segments)
+                        first.segments = [{ text: prefix, mono: false }].concat(warning[0].segments)
+                    return [first].concat(warning.slice(1))
+                }
                 return [{ kind: "text", text: prefix }].concat(warning)
             }
         }

@@ -4,8 +4,9 @@ import org.kde.plasma.components as PC3
 import org.kde.kirigami as Kirigami
 import "../code/util.js" as U
 
-// Satzteile und Befehle untereinander (parts aus text_parts in backend.py: [{kind: "text"|"cmd", text}]).
-// Ein Befehl steht in Monospace auf eigenen Zeilen, umgebrochen mit U.wrapCommand nach der verfügbaren Breite
+// Satzteile und Befehle untereinander (parts aus inline_parts in backend.py: [{kind: "text"|"cmd", text, segments}]).
+// Kurze Befehle stehen als Segment im Satz (Monospace).
+// Ein längerer Befehl steht in Monospace auf eigenen Zeilen, umgebrochen mit U.wrapCommand nach der verfügbaren Breite
 // (zuerst an Leerzeichen, dann nach / = _ - . :, zuletzt hart; Folgezeilen 2 Zeichen eingerückt). Je Zeile ein
 // nicht umbrechender Text, damit Qt nicht selbst trennt; nie abgeschnitten, nie breiter als verfügbar.
 ColumnLayout {
@@ -39,7 +40,10 @@ ColumnLayout {
                 wrapMode: Text.Wrap
                 elide: Text.ElideNone
                 color: partsText.color
-                text: part.isCommand ? "" : part.modelData.text
+                // kurze Befehle im Satz (Segmente aus inline_parts) in Monospace, sonst schlichter Text
+                readonly property bool rich: !part.isCommand && U.hasMono(part.modelData.segments)
+                textFormat: rich ? Text.RichText : Text.PlainText
+                text: part.isCommand ? "" : rich ? U.segmentsRich(part.modelData.segments) : part.modelData.text
             }
             Column {
                 id: lines

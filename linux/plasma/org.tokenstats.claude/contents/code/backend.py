@@ -77,6 +77,30 @@ def _command_break(text, limit):
     return limit
 
 
+# Kurze Befehle ohne Leerzeichen (»claude«) stehen im Satz statt allein auf einer Zeile („Melde dich mit claude an.“)
+INLINE_COMMAND_MAX = 16
+
+
+def inline_parts(parts, max_chars=INLINE_COMMAND_MAX):
+    """Teile -> Teile für die Anzeige: Text-Teile und kurze Befehle (ohne Leerzeichen, höchstens max_chars Zeichen)
+    werden zu einem Text-Teil mit „segments“ [{text, mono}] zusammengefasst (mit Leerzeichen verbunden; „text“
+    ist der ganze Satz ohne Auszeichnung). Längere Befehle bleiben eigene Teile (kind „cmd“, wrap_command)."""
+    out = []
+    for part in parts:
+        short = (part["kind"] == "cmd" and len(part["text"]) <= max_chars
+                 and not any(c.isspace() for c in part["text"]))
+        if part["kind"] != "text" and not short:
+            out.append(dict(part))
+            continue
+        segment = {"text": part["text"], "mono": part["kind"] == "cmd"}
+        if out and out[-1]["kind"] == "text":
+            out[-1]["segments"].append(segment)
+            out[-1]["text"] += " " + part["text"]
+        else:
+            out.append({"kind": "text", "text": part["text"], "segments": [segment]})
+    return out
+
+
 def wrap_command(command, max_chars, indent=2):
     """Monospace-Befehl -> Zeilen mit höchstens max_chars Zeichen, Folgezeilen um indent Leerzeichen eingerückt
     (die Einrückung zählt mit). Bruch am letzten passenden Leerzeichen, sonst nach dem letzten „=“, sonst nach
@@ -189,7 +213,7 @@ def account_view(account, info, error, count):
     return {"id": account["id"], "label": account["label"], "state": account["state"],
             "title": f"Claude · {account['label']}" if count > 1 else "Claude",
             "folder": short_path(account["dir"]) if account["folder"] else None,
-            "info": info, "error": error, "errorParts": text_parts(error), "pct": worst_pct(info),
+            "info": info, "error": error, "errorParts": inline_parts(text_parts(error)), "pct": worst_pct(info),
             "problem": missing or (not info and bool(error)),
             "missing": MISSING_FOLDER_TEXT if missing else None,
             "missingHint": MISSING_FOLDER_HINT if missing else None}
@@ -410,9 +434,9 @@ def limits_with_cache(account):
 def main():
     """Ein Eintrag je Konto unter „accounts“ (Felder aus account_view plus Stand), „tightest“ = ID des
     knappsten Kontos (beim Öffnen gewählt), „usageAccounts“ = Zahl der Konten, deren Protokolle zählen,
-    „emptyParts“ = Text des leeren Zustands als Satzteile und Befehle (text_parts)."""
+    „emptyParts“ = Text des leeren Zustands als Satzteile und Befehle (inline_parts)."""
     result = {"error": None, "priceDate": PRICES_AS_OF, "accounts": [], "tightest": None, "usageAccounts": 0,
-              "emptyParts": EMPTY_PARTS}
+              "emptyParts": inline_parts(EMPTY_PARTS)}
     accounts = discover_accounts()
     views = [account_view(account, *limits_with_cache(account), len(accounts)) for account in accounts]
     result["tightest"] = tightest_id(views)

@@ -94,3 +94,18 @@ function wrapCommand(command, maxChars, indent) {
     }
     return lines
 }
+
+// Text-Teil mit Segmenten aus inline_parts (backend.py): kurze Befehle stehen im Satz in Monospace.
+function hasMono(segments) {
+    if (!segments) return false
+    for (var i = 0; i < segments.length; i++)
+        if (segments[i].mono) return true
+    return false
+}
+
+function segmentsRich(segments) {
+    return segments.map(function (seg) {
+        var text = String(seg.text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        return seg.mono ? '<span style="font-family: monospace">' + text + "</span>" : text
+    }).join(" ")
+}

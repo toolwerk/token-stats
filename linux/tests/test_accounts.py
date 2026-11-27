@@ -368,6 +368,22 @@ class InlineTest(unittest.TestCase):
         self.assertEqual(gtk.inline_parts([{"kind": "cmd", "text": "claude"}]),
                          [{"kind": "text", "text": "claude", "segments": [{"text": "claude", "mono": True}]}])
 
+    def test_backend_matches_gtk(self):
+        cases = [gtk.EMPTY_PARTS, gtk.text_parts("Anmeldung abgelaufen: »claude« starten"),
+                 gtk.text_parts("Nicht angemeldet: »CLAUDE_CONFIG_DIR=~/.claude-arbeit claude« starten"), []]
+        for parts in cases:
+            self.assertEqual(backend.inline_parts(parts), gtk.inline_parts(parts))
+
+    @unittest.skipUnless(shutil.which("node"), "node fehlt")
+    def test_util_js_rich_text(self):
+        with open(os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "code", "util.js")) as f:
+            js = f.read().replace(".pragma library", "")
+        segments = backend.inline_parts(backend.EMPTY_PARTS)[0]["segments"] + [{"text": "a<b", "mono": False}]
+        js += "\nconsole.log(JSON.stringify([hasMono(" + json.dumps(segments) + "), segmentsRich(" + json.dumps(segments) + ")]));\n"
+        out = subprocess.run(["node", "-"], input=js, capture_output=True, text=True, check=True).stdout
+        self.assertEqual(json.loads(out), [True, 'Melde dich mit <span style="font-family: monospace">claude</span> '
+                                                 'an. Weitere Ordner: a&lt;b'])
+
     def test_markup_is_escaped(self):
         self.assertEqual(gtk.segments_markup([{"text": "a<b & c>", "mono": False}]), "a&lt;b &amp; c&gt;")
 
@@ -496,7 +512,8 @@ class BackendOutputTest(unittest.TestCase):
         Home(self)
         result = self.run_main()
         self.assertEqual((result["accounts"], result["tightest"], result["usageAccounts"]), ([], None, 0))
-        self.assertEqual(result["emptyParts"], backend.EMPTY_PARTS)
+        self.assertEqual(result["emptyParts"], backend.inline_parts(backend.EMPTY_PARTS))
+        self.assertEqual(result["emptyParts"][0]["text"], "Melde dich mit claude an. Weitere Ordner:")
 
 
 if __name__ == "__main__":
