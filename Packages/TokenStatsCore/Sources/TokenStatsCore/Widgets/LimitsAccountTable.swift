@@ -99,7 +99,8 @@ struct LimitsAccountTable: View {
                     if !stacked {
                         limitName(window).frame(width: LimitsAccountTable.limitWidth, alignment: .leading)
                     }
-                    MeterBar(percent: window.percent, elapsed: window.elapsedFraction(now: now), color: window.severity.color)
+                    MeterBar(percent: window.percent, elapsed: window.elapsedFraction(now: now), color: window.severity.color,
+                             markHeight: 8)
                         .frame(width: LimitsAccountTable.barWidth, height: 4)
                     Text(Format.percent(window.percent))
                         .font(.system(size: 11, weight: .semibold))
