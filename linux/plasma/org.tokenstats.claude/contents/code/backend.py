@@ -26,9 +26,11 @@ WINDOWS = {"session": 5 * 3600, "weekly_all": 7 * 86400, "weekly_scoped": 7 * 86
 
 # Zustand eines Kontoeintrags (Textkatalog „Mehrere Konten“, Abschnitt „Modell“)
 OK, MISSING_FOLDER = "ok", "missingFolder"
-# Wie in den Einstellungen auf macOS und Windows; der Pfad steht darüber auf eigener Zeile (Feld „folder“)
-MISSING_FOLDER_TEXT = ("Ordner nicht gefunden. Das Konto steht grau im Menü. "
-                       "Ist das Laufwerk eingehängt, wird es wieder abgefragt.")
+# Wörtlich wie im macOS-Popover (UsageStore.problem(for:)), der Pfad steht im Satz
+MISSING_FOLDER_TEXT = ("Ordner nicht gefunden: {path}. "
+                       "Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.")
+# Ältere Cache-Einträge (vor dem Satz „Server antwortet mit HTTP nnn.“) enthalten nur „HTTP nnn“
+OLD_HTTP_ERROR_RE = re.compile(r"^HTTP (\d{3})$")
 MISSING_FOLDER_HINT = "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfernen, wenn es ihn nicht mehr gibt."
 NO_INFO = {"plan": "", "limits": [], "extra": None}
 
@@ -212,15 +214,22 @@ def tightest_id(accounts):
     return best or (accounts[0]["id"] if accounts else None)
 
 
+def error_sentence(error):
+    """Fehlertext für die Anzeige: ein alter Cache-Text „HTTP 503“ wird zum Satz wie auf macOS."""
+    match = OLD_HTTP_ERROR_RE.match(error or "")
+    return f"Server antwortet mit HTTP {match.group(1)}." if match else error
+
+
 def account_view(account, info, error, count):
     """Eintrag für die Anzeige. problem = grau mit „!“: Ordner fehlt, oder Abruffehler ohne Stand."""
     missing = account["state"] == MISSING_FOLDER
+    error = error_sentence(error)
     return {"id": account["id"], "label": account["label"], "state": account["state"],
             "title": f"Claude · {account['label']}" if count > 1 else "Claude",
             "folder": short_path(account["dir"]) if account["folder"] else None,
             "info": info, "error": error, "errorParts": inline_parts(text_parts(error)), "pct": worst_pct(info),
             "problem": missing or (not info and bool(error)),
-            "missing": MISSING_FOLDER_TEXT if missing else None,
+            "missing": MISSING_FOLDER_TEXT.format(path=short_path(account["dir"])) if missing else None,
             "missingHint": MISSING_FOLDER_HINT if missing else None}
 
 

@@ -24,11 +24,14 @@ function weekdayShort(date) {
     return WEEKDAYS[date.getDay()]
 }
 
+// Wie Format.duration auf macOS, bewusst grob: „40 Min.“, „5 Std.“, „1 Tag“, „4 Tage“ (wie dur() in GTK)
 function duration(secs) {
-    secs = Math.floor(secs)
-    var d = Math.floor(secs / 86400), h = Math.floor(secs % 86400 / 3600), m = Math.floor(secs % 3600 / 60)
-    if (d) return h ? d + " d " + h + " h" : d + " d"
-    return h ? h + " h " + m + " min" : m + " min"
+    var minutes = secs / 60
+    if (minutes < 90) return Math.max(1, Math.floor(minutes + 0.5)) + " Min."
+    var hours = minutes / 60
+    if (hours < 24) return Math.floor(hours + 0.5) + " Std."
+    var days = Math.floor(hours / 24 + 0.5)
+    return days === 1 ? "1 Tag" : days + " Tage"
 }
 
 function limitState(l) {

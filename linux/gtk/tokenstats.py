@@ -54,17 +54,22 @@ LIMITS_CACHE = f"{ICON_DIR}/limits.json"
 _LIMITS_LOCK = threading.Lock()
 
 GREEN, YELLOW, RED = (0.30, 0.75, 0.50), (0.89, 0.66, 0.24), (0.85, 0.30, 0.30)
-# Rot für Sätze (nicht für Balken und Prozente): auf dem festen Grund #1e1e1e hat RED (#d94c4c) nur 4,0:1,
-# #f59a8a 7,8:1 – dieselbe Textfarbe wie auf macOS und Windows im Dunkeln
+# Textfarben je Zustand (Sätze, Prozente, Pace-Text) mit mindestens 4,5:1 auf dem festen dunklen Grund #1e1e1e
+# und den Flächen darauf (#2c2c2c, #242424). RED (#d94c4c) hat dort nur 4,0:1, darum #f59a8a (7,8:1) wie auf
+# macOS und Windows im Dunkeln; GREEN (7,2:1) und YELLOW (7,9:1) reichen. Balken und Punkte bleiben bei color_for.
 RED_TEXT = "#f59a8a"
+# Grau der Fehler-Chips: #9a9a9a hat auf dem gewählten Chip (#263c52) nur 4,0:1, #a8a8a8 4,8:1
+PROBLEM_GREY = "#a8a8a8"
 BLUE, BLUE_DIM, GREY = (0.0, 0.57, 1.0), (0.06, 0.37, 0.64), (0.55, 0.55, 0.55)
 WINDOWS = {"session": 5 * 3600, "weekly_all": 7 * 86400, "weekly_scoped": 7 * 86400}
 
 # Zustand eines Kontoeintrags und Texte (Textkatalog „Mehrere Konten“, Abschnitte „Modell“ und „Linux“)
 OK, MISSING_FOLDER = "ok", "missingFolder"
-# Wie in den Einstellungen auf macOS und Windows; der Pfad steht darüber auf eigener Zeile (Feld „folder“)
-MISSING_FOLDER_TEXT = ("Ordner nicht gefunden. Das Konto steht grau im Menü. "
-                       "Ist das Laufwerk eingehängt, wird es wieder abgefragt.")
+# Wörtlich wie im macOS-Popover (UsageStore.problem(for:)), der Pfad steht im Satz
+MISSING_FOLDER_TEXT = ("Ordner nicht gefunden: {path}. "
+                       "Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.")
+# Ältere Cache-Einträge (vor dem Satz „Server antwortet mit HTTP nnn.“) enthalten nur „HTTP nnn“
+OLD_HTTP_ERROR_RE = re.compile(r"^HTTP (\d{3})$")
 MISSING_FOLDER_HINT = "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfernen, wenn es ihn nicht mehr gibt."
 EMPTY_TITLE = "Kein Claude-Konto gefunden"
 
@@ -198,8 +203,13 @@ button.ts-acc { background: #2c2c2c; border: 1px solid #3a3a3a; border-radius: 8
                 color: #e6e6e6; padding: 3px 10px; }
 button.ts-acc:hover { background: #343434; }
 button.ts-acc.ts-sel { background: rgba(10, 132, 255, 0.18); border-color: #0a84ff; }
-button.ts-acc.ts-problem, button.ts-acc.ts-problem label { color: #9a9a9a; }
+button.ts-acc.ts-problem, button.ts-acc.ts-problem label { color: #a8a8a8; }
 .ts-bold { font-weight: bold; }
+button.ts-btn { background: #2c2c2c; border: 1px solid #3a3a3a; border-radius: 8px; box-shadow: none;
+                text-shadow: none; color: #e6e6e6; padding: 3px 10px; }
+button.ts-btn:hover { background: #343434; }
+button.ts-btn:active { background: #3a3a3a; }
+button.ts-btn label { color: #e6e6e6; text-shadow: none; }
 """
 
 
@@ -279,15 +289,22 @@ def tightest_id(accounts):
     return best or (accounts[0]["id"] if accounts else None)
 
 
+def error_sentence(error):
+    """Fehlertext für die Anzeige: ein alter Cache-Text „HTTP 503“ wird zum Satz wie auf macOS."""
+    match = OLD_HTTP_ERROR_RE.match(error or "")
+    return f"Server antwortet mit HTTP {match.group(1)}." if match else error
+
+
 def account_view(account, info, note, count):
     """Eintrag für die Anzeige. problem = grau mit „!“: Ordner fehlt, oder Abruffehler ohne Stand."""
     missing = account["state"] == MISSING_FOLDER
+    note = error_sentence(note)
     return {"id": account["id"], "label": account["label"], "state": account["state"],
             "title": f"Claude · {account['label']}" if count > 1 else "Claude",
             "folder": short_path(account["dir"]) if account["folder"] else None,
             "info": info, "note": note, "pct": worst_pct(info),
             "problem": missing or (not info and bool(note)),
-            "missing": MISSING_FOLDER_TEXT if missing else None,
+            "missing": MISSING_FOLDER_TEXT.format(path=short_path(account["dir"])) if missing else None,
             "missingHint": MISSING_FOLDER_HINT if missing else None}
 
 
@@ -572,16 +589,26 @@ def until(iso):
 
 
 def dur(secs):
-    d, r = divmod(int(secs), 86400); h, r = divmod(r, 3600)
-    if d:
-        return f"{d} d" if not h else f"{d} d {h} h"
-    return f"{h} h {r // 60} min" if h else f"{r // 60} min"
+    """Wie Format.duration auf macOS, bewusst grob: „40 Min.“, „5 Std.“, „1 Tag“, „4 Tage“ (kaufmännisch gerundet)."""
+    minutes = secs / 60
+    if minutes < 90:
+        return f"{max(1, int(minutes + 0.5))} Min."
+    hours = minutes / 60
+    if hours < 24:
+        return f"{int(hours + 0.5)} Std."
+    days = int(hours / 24 + 0.5)
+    return "1 Tag" if days == 1 else f"{days} Tage"
 
 
 # ---------- widgets ----------
 
 def color_for(pct):
     return RED if pct >= 100 else YELLOW if pct >= 80 else GREEN
+
+
+def text_color_for(pct):
+    """Textfarbe zum Zustand (siehe RED_TEXT): Prozente, Pace-Text, Abzeichen."""
+    return RED_TEXT if pct >= 100 else hexc(color_for(pct))
 
 
 def rgb(hexcolor):
@@ -795,10 +822,14 @@ class Popup(Gtk.Window):
 
         foot = Gtk.Box(spacing=8); foot.get_style_context().add_class("ts-foot")
         self.status = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)   # Stand und Hinweis, siehe render()
+        self.status.set_valign(Gtk.Align.CENTER)   # „Stand …“ mittig zu den Knöpfen, nicht oben
         foot.pack_start(self.status, True, True, 0)
         rb = Gtk.Button(label="⟳"); rb.connect("clicked", lambda *_: app.refresh())
-        foot.pack_end(rb, False, False, 0)
         qb = Gtk.Button(label="Beenden"); qb.connect("clicked", lambda *_: Gtk.main_quit())
+        for b in (rb, qb):   # dunkel wie das Popup, unabhängig vom System-Theme (Adwaita hell o. ä.)
+            b.get_style_context().add_class("ts-btn")
+            b.set_valign(Gtk.Align.CENTER)
+        foot.pack_end(rb, False, False, 0)
         foot.pack_end(qb, False, False, 0)
         outer.pack_end(foot, False, False, 0)
         self.page_btns["limits"].set_active(True)
@@ -912,8 +943,6 @@ class Popup(Gtk.Window):
         account = self.app.account()
         if account and account["state"] == MISSING_FOLDER:
             self.body.pack_start(label(account["title"], "ts-h", wrap=True), False, False, 0)
-            # Pfad wie in den Einstellungen auf macOS und Windows: eigene Zeile in Monospace, bricht wie ein Befehl um
-            self.body.pack_start(CommandLabel(account["folder"]), False, False, 0)
             self.body.pack_start(markup(label(account["missing"], wrap=True), RED_TEXT), False, False, 0)
             self.body.pack_start(label(account["missingHint"], "ts-dim", wrap=True), False, False, 0)
             return
@@ -928,7 +957,7 @@ class Popup(Gtk.Window):
         h = Gtk.Box(spacing=8)
         h.pack_start(label(account["title"], "ts-h", wrap=True), False, False, 0)   # darf zweizeilig werden
         h.pack_start(label(info["plan"], "ts-dim ts-mono"), False, False, 0)
-        pill = markup(label(f"{worst:.0f} %", "ts-pill"), hexc(color_for(worst)))
+        pill = markup(label(f"{worst:.0f} %", "ts-pill"), text_color_for(worst))
         h.pack_end(pill, False, False, 0)
         self.body.pack_start(h, False, False, 0)
         for r in info["limits"]:
@@ -936,7 +965,7 @@ class Popup(Gtk.Window):
             top = Gtk.Box(spacing=8)
             top.pack_start(label(r["title"], "ts-h"), False, False, 0)
             top.pack_start(label(r["sub"], "ts-dim"), False, False, 0)
-            top.pack_end(markup(label(f"{r['pct']:.0f} %", "ts-h"), hexc(color_for(r["pct"]))), False, False, 0)
+            top.pack_end(markup(label(f"{r['pct']:.0f} %", "ts-h"), text_color_for(r["pct"])), False, False, 0)
             box.pack_start(top, False, False, 0)
             left = until(r["reset"]) if r["reset"] else None
             elapsed = None if left is None else 1 - left / r["window"]
@@ -953,9 +982,9 @@ class Popup(Gtk.Window):
                 if abs(gap) < r["window"] * 0.02:
                     txt, col = "im Takt", None
                 elif gap > 0:
-                    txt, col = f"{dur(gap)} vorgegriffen", hexc(color_for(r["pct"]))
+                    txt, col = f"{dur(gap)} vorgegriffen", text_color_for(r["pct"])
                 else:
-                    txt, col = f"{dur(-gap)} ungenutzt", hexc(color_for(r["pct"]))
+                    txt, col = f"{dur(-gap)} ungenutzt", text_color_for(r["pct"])
                 l = label(txt, "ts-dim")
                 bottom.pack_end(markup(l, col) if col else l, False, False, 0)
             box.pack_start(bottom, False, False, 0)

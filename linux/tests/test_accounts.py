@@ -23,8 +23,9 @@ BACKEND = os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "co
 GTK = os.path.join(LINUX, "gtk", "tokenstats.py")
 
 # Texte aus dem Textkatalog „Mehrere Konten“, Abschnitt „Linux“
-MISSING_TEXT = ("Ordner nicht gefunden. Das Konto steht grau im Menü. "
-                "Ist das Laufwerk eingehängt, wird es wieder abgefragt.")
+# wörtlich wie im macOS-Popover (Sources/TokenStats/Model/UsageStore.swift, problem(for:))
+MISSING_TEXT = ("Ordner nicht gefunden: {path}. "
+                "Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.")
 MISSING_HINT = "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfernen, wenn es ihn nicht mehr gibt."
 EMPTY_TITLE = "Kein Claude-Konto gefunden"
 EMPTY_TEXT = "Melde dich mit »claude« an. Weitere Ordner: TOKENSTATS_CLAUDE_DIRS=/pfad/eins:/pfad/zwei"
@@ -217,8 +218,7 @@ class ViewTest(unittest.TestCase):
                 self.assertTrue(v["problem"])
                 self.assertIsNone(v["pct"])
                 self.assertEqual(v["title"], "Claude · claude-arbeit")
-                self.assertEqual(v["missing"], MISSING_TEXT)
-                self.assertEqual(v["folder"], "~/usb/claude-arbeit")   # steht auf eigener Zeile darüber
+                self.assertEqual(v["missing"], MISSING_TEXT.format(path="~/usb/claude-arbeit"))
                 self.assertEqual(v["missingHint"], MISSING_HINT)
 
     def test_problem_flags(self):
@@ -253,6 +253,24 @@ class ViewTest(unittest.TestCase):
                 self.assertIn('f"Server antwortet mit HTTP {e.code}."', source)
         with open(os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "ui", "FullView.qml")) as f:
             self.assertIn("withValues && view.acc.errorParts", f.read())   # Plasma: Fußzeile nur mit Stand
+
+    def test_old_cache_http_text_becomes_sentence(self):
+        account = {"id": "claude", "folder": None, "dir": "/x/.claude", "label": "privat", "state": "ok"}
+        for name, module in MODULES.items():
+            with self.subTest(module=name):
+                v = self.view(module, account, None, "HTTP 503")   # alter Cache-Eintrag
+                self.assertEqual(v["error"], "Server antwortet mit HTTP 503.")
+                self.assertEqual(module.error_sentence("Server antwortet mit HTTP 500."), "Server antwortet mit HTTP 500.")
+                self.assertEqual(module.error_sentence("Offline (URLError)"), "Offline (URLError)")
+                self.assertIsNone(module.error_sentence(None))
+        parts = backend.account_view(account, None, "HTTP 429", 1)["errorParts"]
+        self.assertEqual(parts[0]["text"], "Server antwortet mit HTTP 429.")
+
+    def test_macos_popover_sentence(self):
+        with open(os.path.join(os.path.dirname(LINUX), "Sources", "TokenStats", "Model", "UsageStore.swift")) as f:
+            swift = f.read()
+        self.assertIn('"Ordner nicht gefunden: \\(folder). Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder."',
+                      swift)
 
     def test_catalog_texts(self):
         for name, module in MODULES.items():
@@ -294,6 +312,34 @@ class ContrastTest(unittest.TestCase):
     def test_gtk_red_text(self):
         self.assertGreaterEqual(contrast(gtk.RED_TEXT, "#1e1e1e"), 4.5)
         self.assertLess(contrast(gtk.hexc(gtk.RED), "#1e1e1e"), 4.5)   # Gegenprobe: das Balkenrot reicht nicht
+
+    def test_gtk_state_text_colors(self):
+        for pct in (10, 85, 100):
+            for background in ("#1e1e1e", "#2c2c2c", "#242424"):
+                self.assertGreaterEqual(contrast(gtk.text_color_for(pct), background), 4.5, (pct, background))
+        for background in ("#2c2c2c", "#263c52"):   # Chip, gewählter Chip
+            self.assertGreaterEqual(contrast(gtk.PROBLEM_GREY, background), 4.5, background)
+
+    def test_plasma_state_text_colors(self):
+        with open(os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "ui", "FullView.qml")) as f:
+            qml = f.read()
+        light = {"#277a4d", "#744f00", "#952f1a", "#5f6265"}
+        dark = {"#4cbe83", "#e8b24a", "#f59a8a", "#a3a7ab"}
+        for color in light | dark:
+            self.assertIn(f'"{color}"', qml)
+        for color in light:   # Breeze hell, Popup-Grund und gewählter Chip (Hervorhebung 20 %)
+            for background in ("#eff0f1", "#ffffff"):
+                self.assertGreaterEqual(contrast(color, background), 4.5, (color, background))
+        for color in dark:
+            for background in ("#202326", "#292c30"):
+                self.assertGreaterEqual(contrast(color, background), 4.5, (color, background))
+        self.assertGreaterEqual(contrast("#5f6265", "#cbe3ef"), 4.5)
+        self.assertGreaterEqual(contrast("#a3a7ab", "#263f4d"), 4.5)
+        # Gegenprobe: Breeze positive/neutral/disabled als Text auf hell
+        for breeze in ("#27ae60", "#f67400", "#a0a1a3"):
+            self.assertLess(contrast(breeze, "#eff0f1"), 4.5, breeze)
+        # Texte nutzen textTint; tint nur noch für Balken (Meter), Punkte und den Rahmen des Abzeichens
+        self.assertNotRegex(qml, r"(?<!border\.)color: view\.tint\(")
 
     def test_plasma_red_text(self):
         with open(os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "ui", "FullView.qml")) as f:
@@ -426,6 +472,27 @@ class FormatTest(unittest.TestCase):
         self.assertEqual((gtk.fmt(2_800_000), gtk.fmt(1_250_000), gtk.fmt(245_000), gtk.fmt(12)),
                          ("2,8 M", "1,2 M", "245 k", "12"))
         self.assertEqual((gtk.money(2.09), gtk.money(1234.5)), ("2,09 $", "1.234,50 $"))
+
+    def test_duration_like_macos(self):
+        cases = {60: "1 Min.", 33 * 60: "33 Min.", 3600: "60 Min.", 89 * 60: "89 Min.", 90 * 60: "2 Std.",
+                 2 * 3600 + 10 * 60: "2 Std.", 20 * 3600: "20 Std.", 30 * 3600: "1 Tag", 3 * 86400: "3 Tage", 10: "1 Min."}
+        for secs, text in cases.items():
+            self.assertEqual(gtk.dur(secs), text, secs)
+        if shutil.which("node"):
+            with open(os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "code", "util.js")) as f:
+                js = f.read().replace(".pragma library", "")
+            js += "\nconsole.log(JSON.stringify(" + json.dumps(list(cases)) + ".map(duration)));\n"
+            out = subprocess.run(["node", "-"], input=js, capture_output=True, text=True, check=True).stdout
+            self.assertEqual(json.loads(out), list(cases.values()))
+
+    def test_no_dot_decimals_left(self):
+        for path in (GTK, BACKEND):
+            with open(path) as f:
+                source = f.read()
+            self.assertNotRegex(source, r":,?\.[1-9]\d*f\}", path)   # keine f-Strings mit Punkt-Dezimalen mehr
+        with open(os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "code", "util.js")) as f:
+            js = f.read()
+        self.assertEqual(js.count("toFixed("), 1)   # nur in decimal()
 
     def test_gtk_weekdays(self):
         from datetime import date, timedelta
@@ -560,7 +627,7 @@ class BackendOutputTest(unittest.TestCase):
         missing = result["accounts"][2]
         self.assertEqual((missing["state"], missing["problem"], missing["pct"], missing["limits"]),
                          ("missingFolder", True, None, []))
-        self.assertEqual((missing["missing"], missing["folder"]), (MISSING_TEXT, "~/usb/claude-arbeit"))
+        self.assertEqual(missing["missing"], MISSING_TEXT.format(path="~/usb/claude-arbeit"))
         self.assertEqual(result["accounts"][1]["pct"], 88)
         self.assertFalse(result["accounts"][1]["problem"])
         self.assertEqual(result["accounts"][1]["errorParts"], [])

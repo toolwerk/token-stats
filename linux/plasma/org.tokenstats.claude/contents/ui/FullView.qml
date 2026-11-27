@@ -31,11 +31,19 @@ ColumnLayout {
     Layout.preferredWidth: Kirigami.Units.gridUnit * 24
     Layout.preferredHeight: Kirigami.Units.gridUnit * 34
 
-    // Rot für Sätze (Ordner fehlt): Kirigami.Theme.negativeTextColor (Breeze #da4453) hat auf Breeze hell
-    // (#eff0f1) 3,7:1 und auf Breeze dunkel (#202326) 3,7:1. Ein Rot für beide gibt es nicht; darum je nach
-    // Helligkeit des Grunds die Textfarben von macOS und Windows: #952f1a hell 6,8:1, #f59a8a dunkel 7,4:1.
+    // Textfarben je Zustand (Sätze, Prozente, Pace-Text, Abzeichen, graue Fehler-Chips) mit mindestens 4,5:1.
+    // Die Breeze-Farben (Kirigami positive/neutral/negative/disabled) bleiben für Balken und Punkte: Auf Breeze
+    // hell (#eff0f1) haben sie als Text nur 2,5:1 (grün, orange), 3,7:1 (rot) und 2,3:1 (grau). Ein Ton für hell
+    // und dunkel zugleich geht nicht, darum je nach Helligkeit des Grunds (Rechnung im PR #5, Runde 14):
+    // hell auf #eff0f1: grün #277a4d 4,6:1, orange #744f00 6,4:1, rot #952f1a 6,8:1, grau #5f6265 5,4:1;
+    // dunkel auf #202326: grün #4cbe83 6,8:1, orange #e8b24a 8,2:1, rot #f59a8a 7,4:1, grau #a3a7ab 6,5:1.
     readonly property bool darkTheme: Kirigami.ColorUtils.brightnessForColor(Kirigami.Theme.backgroundColor) === Kirigami.ColorUtils.Dark
     readonly property color errorTextColor: darkTheme ? "#f59a8a" : "#952f1a"
+    readonly property color problemTextColor: darkTheme ? "#a3a7ab" : "#5f6265"
+    function textTint(pct) {
+        return pct >= 100 ? errorTextColor
+             : pct >= 80 ? (darkTheme ? "#e8b24a" : "#744f00") : (darkTheme ? "#4cbe83" : "#277a4d")
+    }
 
     function tint(pct) {
         return pct >= 100 ? Kirigami.Theme.negativeTextColor
@@ -55,7 +63,7 @@ ColumnLayout {
     RowLayout {
         Layout.fillWidth: true
         Layout.margins: Kirigami.Units.largeSpacing
-        Kirigami.Heading { text: "Token Stats"; level: 2; Layout.fillWidth: true }
+        Kirigami.Heading { text: "Token Stats"; level: 2; font.bold: true; Layout.fillWidth: true }
         RowLayout {
             spacing: 0
             PC3.Button { text: "Limits"; checkable: true; checked: view.page === "limits"; autoExclusive: true; onClicked: view.page = "limits" }
@@ -93,7 +101,7 @@ ColumnLayout {
                 id: chip
                 required property var modelData
                 readonly property bool selected: view.acc !== null && view.acc.id === modelData.id
-                readonly property color fg: modelData.problem ? Kirigami.Theme.disabledTextColor : Kirigami.Theme.textColor
+                readonly property color fg: modelData.problem ? view.problemTextColor : Kirigami.Theme.textColor
                 // „!“ nur als Zeichen; für Screenreader steht der Zustand in der Beschreibung
                 text: modelData.label
                 Accessible.description: modelData.problem ? "Fehler" : ""
@@ -201,6 +209,7 @@ ColumnLayout {
             Kirigami.Heading {
                 text: "Kein Claude-Konto gefunden"
                 level: 3
+                font.bold: true
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 elide: Text.ElideNone
@@ -221,15 +230,10 @@ ColumnLayout {
             Kirigami.Heading {
                 text: view.acc.title
                 level: 3
+                font.bold: true
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 elide: Text.ElideNone
-            }
-            // Pfad wie in den Einstellungen auf macOS und Windows: eigene Zeile in Monospace, bricht wie ein Befehl um
-            PartsText {
-                parts: view.acc.folder ? [{ kind: "cmd", text: view.acc.folder }] : []
-                Layout.fillWidth: true
-                opacity: 0.7
             }
             PC3.Label {
                 text: view.acc.missing || ""
@@ -257,6 +261,7 @@ ColumnLayout {
                 Kirigami.Heading {
                     text: view.acc.title
                     level: 3
+                    font.bold: true
                     Layout.fillWidth: true
                     Layout.maximumWidth: implicitWidth
                     wrapMode: Text.Wrap
@@ -269,7 +274,7 @@ ColumnLayout {
                     visible: view.acc.limits.length > 0
                     text: Math.round(worst) + " %"
                     font.bold: true
-                    color: view.tint(worst)
+                    color: view.textTint(worst)
                     leftPadding: 10; rightPadding: 10
                     background: Rectangle { radius: height / 2; color: "transparent"; border.width: 1; border.color: view.tint(worst) }
                 }
@@ -294,7 +299,7 @@ ColumnLayout {
                         Kirigami.Heading { text: row.modelData.title; level: 4 }
                         PC3.Label { text: row.modelData.sub; opacity: 0.7 }
                         Item { Layout.fillWidth: true }
-                        Kirigami.Heading { text: Math.round(row.modelData.pct) + " %"; level: 4; color: view.tint(row.modelData.pct) }
+                        Kirigami.Heading { text: Math.round(row.modelData.pct) + " %"; level: 4; color: view.textTint(row.modelData.pct) }
                     }
                     Meter {
                         Layout.fillWidth: true
@@ -316,7 +321,7 @@ ColumnLayout {
                         Item { Layout.fillWidth: true }
                         PC3.Label {
                             visible: row.st.elapsed >= 0
-                            color: view.tint(row.modelData.pct)
+                            color: view.textTint(row.modelData.pct)
                             text: Math.abs(row.st.gap) < row.modelData.window * 0.02 ? "im Takt"
                                   : row.st.gap > 0 ? U.duration(row.st.gap) + " vorgegriffen"
                                                    : U.duration(-row.st.gap) + " ungenutzt"
@@ -342,7 +347,7 @@ ColumnLayout {
             spacing: Kirigami.Units.largeSpacing
             readonly property var agg: U.aggregate(view.info.usage, view.rangeDays)
             RowLayout {
-                Kirigami.Heading { text: "Claude"; level: 3 }
+                Kirigami.Heading { text: "Claude"; level: 3; font.bold: true }
                 PC3.Label {
                     text: view.usageAccounts > 1 ? view.usageAccounts + " Konten" : (view.acc ? view.acc.plan : "")
                     opacity: 0.7; font.family: "monospace"
