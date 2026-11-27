@@ -520,7 +520,7 @@ public struct LimitsWidgetView: View {
     private func content(_ snapshot: WidgetSnapshot) -> some View {
         switch size {
         case .large:
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 0) {
                 if snapshot.providers.allSatisfy({ $0.snapshot == nil }) {
                     headedNote(WidgetHeader(title: "Limits", detail: nil, severity: nil), noDataText(snapshot.providers.first))
                 } else {
@@ -529,13 +529,17 @@ public struct LimitsWidgetView: View {
                         large(snapshot, width: geometry.size.width)
                     }
                 }
+                // Abstand zur Fußzeile nur, wenn es eine gibt (Stand über iCloud) – sonst kostete
+                // die leere Fußzeile unten 2 × 12 pt (Designer-Prüfung PR #5, Runde 9).
                 Spacer(minLength: 0)
-                MachineFooter(snapshot: snapshot)
+                if snapshot.machine != nil {
+                    MachineFooter(snapshot: snapshot).padding(.top, 12)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         case .medium, .small:
             let shown = Self.resolve(snapshot, provider: provider)
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 0) {
                 if let shown, let windows = shown.snapshot?.windows {
                     // Passt nicht jedes Limit (langer Kontoname, kleine Kachel), lieber eins weniger
                     // als ein abgeschnittenes – gezeigt werden dann die knappsten.
@@ -559,7 +563,9 @@ public struct LimitsWidgetView: View {
                     headedNote(WidgetHeader(title: "Limits", detail: nil, severity: nil), noDataText(nil))
                 }
                 Spacer(minLength: 0)
-                MachineFooter(snapshot: snapshot)
+                if snapshot.machine != nil {
+                    MachineFooter(snapshot: snapshot).padding(.top, 8)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }

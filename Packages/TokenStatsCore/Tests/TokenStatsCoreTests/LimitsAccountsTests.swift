@@ -278,6 +278,26 @@ import Testing
         #expect(LimitsAccountTable.needsStacked(rows, total: 308))
     }
 
+    @Test func twoAndThreeLineNamesStayInTheNormalTable() {
+        // Runde 9, E2: Zwei- und Dreizeiler lösen bei 308 pt kein L5 aus.
+        func row(_ label: String, id: String) -> LimitsAccounts.Row {
+            let window = LimitWindow(id: "week", name: "Woche", percent: 0.5)
+            return LimitsAccounts.Row(
+                provider: .init(id: id, name: "Claude · \(label)", snapshot: ProviderSnapshot(windows: [window], fetchedAt: now),
+                                kind: "claude", kindName: "Claude"),
+                window: window)
+        }
+        let available = LimitsAccountTable.nameWidth(total: 308, stacked: false)
+        func lines(_ label: String) -> Int {
+            WrappedTitle.lineCount("Claude · \(label)", size: LimitsAccountTable.nameSize, prefix: "Claude · ",
+                                   prefixWeight: .semibold, accountWeight: .regular, available: available)
+        }
+        #expect(lines("Kunde Schmidt Beratung") == 2)
+        #expect(lines("Hausverwaltung Lindenhof") == 3)
+        #expect(!LimitsAccountTable.needsStacked([row("Kunde Schmidt Beratung", id: "claude@1")], total: 308))
+        #expect(!LimitsAccountTable.needsStacked([row("Hausverwaltung Lindenhof", id: "claude@2")], total: 308))
+    }
+
     @Test func detailLinesStartWithTheSeparator() {
         #expect(WidgetHeader.detailVariant([nil, "Max 20× · +1 Limit"], 1) == ["Max 20×", "· +1 Limit"])
         #expect(WidgetHeader.detailVariant(["knappstes Konto", "Claude · Pro · +2 Limits"], 2)
