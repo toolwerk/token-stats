@@ -27,7 +27,7 @@ public struct WidgetPlaceholder: View {
 /// Kopfzeile der Widgets: Roboter · Titel · rechts der Zustandspunkt des knappsten Limits.
 ///
 /// Nichts wird gekürzt (SPEC §6). Passt nicht alles in eine Zeile, nimmt der Kopf die erste
-/// passende Form: Details unter dem Titel; Titel am „·“ geteilt („Claude ·“ / „Kunde A“);
+/// passende Form: Details unter dem Titel; Titel am „·“ geteilt („Claude“ / „· Kunde A“);
 /// Kontoname zweizeilig mit „Claude · Tarif“ darunter; erst zuletzt freier Umbruch. So hat ein
 /// Kontoname bis 24 Zeichen höchstens zwei Titelzeilen. Die Stufen S1–S8 aus „Widgets
 /// einheitlich“ (#4) ersetzen das später.
@@ -70,7 +70,7 @@ struct WidgetHeader: View {
                 }
             }
             // Erst mit Punkt rechts im Kopf, dann mit Punkt in der Detailzeile (Titel 12 pt breiter).
-            // Kandidaten: Titel am „·“ („Claude ·“ / „Kunde A“), dann der Kontoname zweizeilig an
+            // Kandidaten: Titel am „·“ („Claude“ / „· Kunde A“), dann der Kontoname zweizeilig an
             // Leerzeichen oder Bindestrich mit „Claude · Tarif“ darunter.
             if let kind, let account {
                 ForEach(Self.candidates(splits: splits.count, accountFirst: selection != nil), id: \.self) { candidate in
@@ -86,7 +86,9 @@ struct WidgetHeader: View {
                             stack([line(splits[index][0], Self.titleFont), line(splits[index][1], Self.titleFont)],
                                   details: kindDetails, dot: !dotInRow, dotOnTitle: dotInRow)
                         } else {
-                            stack([line(kind + " ·", Self.titleFont), line(account, .system(size: 12))],
+                            // Der Trennpunkt beginnt die zweite Zeile („Claude“ / „· Kunde A“), statt
+                            // am Zeilenende zu hängen (Designer-Prüfung PR #5, Runde 5).
+                            stack([line(kind, Self.titleFont), line("· " + account, .system(size: 12))],
                                   details: Self.detailVariant([selection, detail], candidate.details),
                                   dot: !dotInRow, dotOnTitle: dotInRow)
                         }
@@ -98,7 +100,9 @@ struct WidgetHeader: View {
             // drückt eine zu lange Detailzeile („Max 20× · +2 Limits“) den Inhalt an den rechten
             // Rand (Designer-Prüfung PR #5, Runde 3).
             let accountFirst = selection != nil && kind != nil && account != nil
-            row(dot: true) {
+            // Der Punkt steht hier rechts in der ersten Detailzeile (wie Stufe S7), damit der
+            // Titel die volle Breite hat – sonst ragte „· kundenbetreuung-“ in den Innenrand.
+            row(dot: false) {
                 VStack(alignment: .leading, spacing: 1) {
                     TokenFlow(spacing: 0) {
                         ForEach(Array(Self.breakTokens(accountFirst ? account! : title).enumerated()), id: \.offset) { _, token in
@@ -108,11 +112,20 @@ struct WidgetHeader: View {
                     let details = (accountFirst ? [selection, [kind!, detail].compactMap { $0 }.joined(separator: " · ")] : [selection, detail])
                         .compactMap { $0?.nilIfEmpty }
                     ForEach(details.indices, id: \.self) { index in
-                        TokenFlow(spacing: 0) {
-                            ForEach(Array(Self.detailTokens(details[index]).enumerated()), id: \.offset) { _, token in
-                                Text(token).font(Self.detailFont).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                        HStack(alignment: .top, spacing: 6) {
+                            TokenFlow(spacing: 0) {
+                                ForEach(Array(Self.detailTokens(details[index]).enumerated()), id: \.offset) { _, token in
+                                    Text(token).font(Self.detailFont).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                                }
+                            }
+                            if index == 0, severity != nil {
+                                Spacer(minLength: 6)
+                                circle.padding(.top, 3)
                             }
                         }
+                    }
+                    if details.isEmpty, severity != nil {
+                        HStack { Spacer(minLength: 6); circle }
                     }
                 }
             }
@@ -236,7 +249,23 @@ struct WidgetHeader: View {
             }
         }
         if !current.isEmpty { tokens.append(current) }
-        return tokens
+        // Der Trennpunkt beginnt die neue Zeile („Claude“ / „· Kunde A“). Nur vor einem sehr
+        // langen Einzelwort (über 14 Zeichen) bleibt er am Ende der Vorzeile, sonst wäre
+        // „· kundenbetreuung-“ breiter als die kleine Kachel.
+        var merged: [String] = []
+        var pending = ""
+        for token in tokens {
+            if token == "· " { pending += token; continue }
+            if !pending.isEmpty, token.count > 14, !merged.isEmpty {
+                merged[merged.count - 1] += pending
+                merged.append(token)
+            } else {
+                merged.append(pending + token)
+            }
+            pending = ""
+        }
+        if !pending.isEmpty { merged.append(pending) }
+        return merged
     }
 
     /// Alle Teilungen in zwei Zeilen an erlaubten Stellen, die längere erste Zeile zuerst.

@@ -146,18 +146,47 @@ import Testing
 
     @Test func notesHaveShorterVariants() {
         // Runde 4: „keine Anmeldung“ ragte in der kleinsten Kachel in den unteren Innenrand.
+        // Runde 5: Auch die kürzeste Stufe nennt den Weg zur Lösung.
         let notSignedIn = "Keine Anmeldung in diesem Ordner. Im Terminal »CLAUDE_CONFIG_DIR=~/claude-alt claude« starten."
         #expect(CommandSplit.shortVariants(notSignedIn) == [
             notSignedIn,
             "Keine Anmeldung. Im Terminal starten: »CLAUDE_CONFIG_DIR=~/claude-alt claude«",
-            "Keine Anmeldung.",
+            "Keine Anmeldung – Befehl in Token Stats.",
         ])
-        let missing = "Ordner nicht gefunden: /Volumes/Daten/kunde-a. Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder."
-        #expect(CommandSplit.shortVariants(missing) == [missing, "Ordner nicht gefunden: /Volumes/Daten/kunde-a."])
-        #expect(CommandSplit.shortVariants(LimitsAccounts.missingMessage).last == "Konto ausgeblendet oder Ordner fehlt.")
-        #expect(CommandSplit.shortVariants("Nicht angemeldet. »codex login« im Terminal ausführen.")[1]
-            == "Nicht angemeldet. Im Terminal starten: »codex login«")
-        #expect(CommandSplit.shortVariants("Kurz.") == ["Kurz."], "ohne kürzere Fassung nur der Text")
+        #expect(CommandSplit.shortVariants("Nicht angemeldet. »codex login« im Terminal ausführen.") == [
+            "Nicht angemeldet. »codex login« im Terminal ausführen.",
+            "Nicht angemeldet. Im Terminal starten: »codex login«",
+            "Nicht angemeldet – Befehl in Token Stats.",
+        ])
+        let missingFolder = "Ordner nicht gefunden: /Volumes/Daten/kunde-a. Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder."
+        #expect(CommandSplit.shortVariants(missingFolder) == [missingFolder, "Ordner fehlt – Details in Token Stats."])
+        #expect(CommandSplit.shortVariants(LimitsAccounts.missingMessage)
+            == [LimitsAccounts.missingMessage, "Konto fehlt – Widget bearbeiten."])
+        #expect(CommandSplit.shortVariants("Noch kein Stand – Token Stats fragt beim nächsten Takt ab.").last
+            == "Noch kein Stand – kommt mit der nächsten Abfrage.")
+        #expect(CommandSplit.shortVariants("Anmeldung abgelaufen. »claude« im Terminal einmal starten.").last
+            == "Anmeldung abgelaufen – Befehl in Token Stats.")
+        #expect(CommandSplit.shortVariants("Server antwortet nicht. Später erneut.").last
+            == "Server antwortet nicht – Details in Token Stats.", "unbekannter Typ: erster Satz und Weg")
+        for variants in [notSignedIn, missingFolder, LimitsAccounts.missingMessage].map(CommandSplit.shortVariants) {
+            #expect(variants.last?.contains("–") == true, "kürzeste Stufe nennt immer den Weg")
+        }
+    }
+
+    @Test func sentenceEndIgnoresAbbreviations() {
+        #expect(CommandSplit.firstSentence("Ordner fehlt, z. B. auf dem Laufwerk. Danach weiter.") == "Ordner fehlt, z. B. auf dem Laufwerk.")
+        #expect(CommandSplit.firstSentence("Pause ca. 5 Min. Dann wieder. Weiter.") == "Pause ca. 5 Min. Dann wieder.")
+        #expect(CommandSplit.firstSentence("Ein Satz. Zweiter Satz.") == "Ein Satz.")
+        #expect(CommandSplit.firstSentence("Nur ein Satz ohne Punkt") == "Nur ein Satz ohne Punkt")
+        #expect(CommandSplit.firstSentence("Nicht angemeldet. »codex login« starten.") == "Nicht angemeldet.", "» beginnt einen neuen Teil")
+    }
+
+    @Test func separatorDotStartsTheNextLine() {
+        // Runde 5, H1: „Claude ·“ / „claude-alt“ wird zu „Claude“ / „· claude-alt“.
+        #expect(WidgetHeader.breakTokens("Claude · Kunde A") == ["Claude ", "· Kunde ", "A"])
+        #expect(WidgetHeader.breakTokens("Claude · kundenbetreuung-niederlassung-sued")
+            == ["Claude · ", "kundenbetreuung-", "niederlassung-", "sued"],
+                "vor einem sehr langen Einzelwort bleibt der Punkt vorn, sonst wäre die Zeile zu breit")
     }
 
     // MARK: Datei

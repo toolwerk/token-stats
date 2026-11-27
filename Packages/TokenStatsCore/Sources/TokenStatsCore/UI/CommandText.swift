@@ -30,9 +30,11 @@ public enum CommandSplit {
     }
 
     /// Ausweichstufen eines Hinweises für enge Flächen (Widget, Designer-Prüfung PR #5,
-    /// Runde 4): der volle Text; der erste Satz mit „Im Terminal starten:“ und den Befehlen;
-    /// nur der erste Satz. Nie abgeschnitten – passt eine Stufe nicht, nimmt die Fläche die
-    /// nächste. „Keine Anmeldung in diesem Ordner.“ wird dabei zu „Keine Anmeldung.“.
+    /// Runden 4 und 5). Nie abgeschnitten, und keine Stufe verliert den Weg zur Lösung:
+    /// 1. der volle Text;
+    /// 2. mit Befehl: erster Satz, „Im Terminal starten:“ und der Befehl;
+    /// 3. ein kurzer Satz je Hinweistyp mit dem Weg, z. B. „Keine Anmeldung – Befehl in Token
+    ///    Stats.“ oder „Konto fehlt – Widget bearbeiten.“ (`wayHint`).
     public static func shortVariants(_ text: String) -> [String] {
         let parts = parts(text)
         let commands = parts.compactMap { part -> String? in
@@ -40,17 +42,54 @@ public enum CommandSplit {
             return nil
         }
         guard case .text(let lead)? = parts.first else { return [text] }
-        var first = lead
-        if let end = lead.range(of: ". ") { first = String(lead[..<end.lowerBound]) + "." }
+        var first = firstSentence(lead)
         if !first.hasSuffix(".") && !first.hasSuffix(":") { first += "." }
         first = first.replacingOccurrences(of: "Keine Anmeldung in diesem Ordner.", with: "Keine Anmeldung.")
         var variants = [text]
         if !commands.isEmpty {
             variants.append(([first, "Im Terminal starten:"] + commands.map { "»\($0)«" }).joined(separator: " "))
         }
-        variants.append(first)
+        variants.append(wayHint(first: first, hasCommand: !commands.isEmpty))
         var seen = Set<String>()
         return variants.filter { seen.insert($0).inserted }
+    }
+
+    /// Kürzeste Stufe: was los ist und wo es weitergeht. Das Widget öffnet beim Antippen
+    /// Token Stats, dort steht der volle Hinweis mit Befehl.
+    static func wayHint(first: String, hasCommand: Bool) -> String {
+        let known: [(prefix: String, hint: String)] = [
+            ("Keine Anmeldung", "Keine Anmeldung – Befehl in Token Stats."),
+            ("Nicht angemeldet", "Nicht angemeldet – Befehl in Token Stats."),
+            ("Anmeldung abgelaufen", "Anmeldung abgelaufen – Befehl in Token Stats."),
+            ("Ordner nicht gefunden", "Ordner fehlt – Details in Token Stats."),
+            ("Konto ausgeblendet oder Ordner fehlt", "Konto fehlt – Widget bearbeiten."),
+            ("Noch kein Stand", "Noch kein Stand – kommt mit der nächsten Abfrage."),
+        ]
+        if let match = known.first(where: { first.hasPrefix($0.prefix) }) { return match.hint }
+        let core = first.hasSuffix(".") || first.hasSuffix(":") ? String(first.dropLast()) : first
+        return "\(core) – \(hasCommand ? "Befehl" : "Details") in Token Stats."
+    }
+
+    /// Abkürzungen, nach deren Punkt kein Satz endet.
+    static let abbreviations: Set<String> = ["ca", "bzw", "etc", "ggf", "vgl", "inkl", "evtl", "Nr", "usw", "max", "min", "Min", "Std"]
+
+    /// Erster Satz bis zu einem Punkt, auf den ein Leerzeichen und ein Großbuchstabe (oder »)
+    /// folgt – nicht nach Abkürzungen wie „z. B.“, „ca.“, „bzw.“ oder „5 Min.“.
+    static func firstSentence(_ text: String) -> String {
+        let characters = Array(text)
+        var index = 0
+        while index < characters.count - 2 {
+            defer { index += 1 }
+            guard characters[index] == ".", characters[index + 1] == " " else { continue }
+            let next = characters[index + 2]
+            guard next.isUppercase || next == "»" else { continue }
+            var wordStart = index
+            while wordStart > 0, characters[wordStart - 1] != " " { wordStart -= 1 }
+            let word = String(characters[wordStart..<index])
+            if word.count == 1 || abbreviations.contains(word) { continue }
+            return String(characters[...index])
+        }
+        return text
     }
 }
 
