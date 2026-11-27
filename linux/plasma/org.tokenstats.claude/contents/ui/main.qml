@@ -33,6 +33,7 @@ PlasmoidItem {
     fullRepresentation: FullView {
         info: root.info
         updated: root.updated
+        expanded: root.expanded
         onRefreshRequested: root.refresh()
     }
 

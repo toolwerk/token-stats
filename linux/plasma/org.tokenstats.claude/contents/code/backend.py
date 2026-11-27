@@ -8,6 +8,8 @@ Sources/TokenStats/Resources/pricing.json of the checkout).
 Several accounts (SPEC §6 „Mehrere Konten je Anbieter“): every CLAUDE_CONFIG_DIR is an account of its own —
 ~/.claude-* and ~/.claude_* with a .claude.json are found automatically, further folders come from
 TOKENSTATS_CLAUDE_DIRS (separated by ":"). Limits per account, usage over the logs of all accounts.
+A folder from CLAUDE_CONFIG_DIR or TOKENSTATS_CLAUDE_DIRS that does not exist stays in the list as
+"missingFolder" (grey with "!" in the account bar) and is never queried.
 """
 import glob, hashlib, json, os, re, sys, time, urllib.error, urllib.request
 from datetime import datetime, timedelta
@@ -21,6 +23,13 @@ LIMITS_CACHE = f"{CACHE_DIR}/limits.json"
 # „Aktualisieren“ oder nach einem Neustart. Der Stand liegt im Cache; main.qml fragt alle 305 s.
 MIN_INTERVAL_S = 300
 WINDOWS = {"session": 5 * 3600, "weekly_all": 7 * 86400, "weekly_scoped": 7 * 86400}
+
+# Zustand eines Kontoeintrags (Textkatalog „Mehrere Konten“, Abschnitt „Modell“)
+OK, MISSING_FOLDER = "ok", "missingFolder"
+MISSING_FOLDER_TEXT = ("Ordner nicht gefunden: {path}. "
+                       "Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.")
+MISSING_FOLDER_HINT = "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfernen, wenn es ihn nicht mehr gibt."
+NO_INFO = {"plan": "", "limits": [], "extra": None}
 
 
 def plan_label(c):
@@ -41,32 +50,40 @@ def short_path(path):
 
 def read_account(path):
     try:
-        account = json.load(open(path)).get("oauthAccount")
+        with open(path) as f:
+            account = json.load(f).get("oauthAccount")
     except (OSError, ValueError, AttributeError):
         return {}
     return account if isinstance(account, dict) else {}
 
 
 def discover_accounts():
-    """-> [{id, folder, dir, label}]: Standardkonto ~/.claude, dann ~/.claude-*/~/.claude_* mit .claude.json,
-    CLAUDE_CONFIG_DIR und TOKENSTATS_CLAUDE_DIRS. Derselbe Ordner und dieselbe Anmeldung (accountUuid) nur einmal."""
+    """-> [{id, folder, dir, label, source, state}] in der Reihenfolge Standard, automatisch gefunden, von Hand.
+
+    Standard: ~/.claude, nur wenn der Ordner da ist. Automatisch: ~/.claude-*/~/.claude_* mit .claude.json.
+    Von Hand: CLAUDE_CONFIG_DIR und TOKENSTATS_CLAUDE_DIRS; fehlt so ein Ordner, bleibt das Konto mit
+    Zustand „missingFolder“ in der Liste und wird nicht abgefragt. Derselbe Ordner (auch per Symlink) und
+    dieselbe Anmeldung (accountUuid) zählen nur einmal, es gilt der zuerst gefundene Eintrag."""
     try:
         names = sorted(n for n in os.listdir(HOME) if n.startswith((".claude-", ".claude_")))
     except OSError:
         names = []
-    folders = [None] + [f"{HOME}/{n}" for n in names
-                        if os.path.isdir(f"{HOME}/{n}") and os.path.isfile(f"{HOME}/{n}/.claude.json")]
+    candidates = [(None, "default")] + [(f"{HOME}/{n}", "auto") for n in names
+                                        if os.path.isdir(f"{HOME}/{n}") and os.path.isfile(f"{HOME}/{n}/.claude.json")]
     for extra in [os.environ.get("CLAUDE_CONFIG_DIR", "")] + os.environ.get(CLAUDE_DIRS_ENV, "").split(":"):
         if extra:
-            folders.append(os.path.abspath(os.path.expanduser(extra)).rstrip("/"))
+            candidates.append((os.path.abspath(os.path.expanduser(extra)).rstrip("/"), "manual"))
     accounts, real_seen, uuid_seen = [], set(), set()
-    for folder in folders:
+    for folder, source in candidates:
         path = folder or f"{HOME}/.claude"
+        exists = os.path.isdir(path)
+        if not exists and source != "manual":
+            continue   # Standardkonto ohne ~/.claude: noch nie angemeldet, also kein Konto
         real = os.path.realpath(path)
-        if real in real_seen or (folder and not os.path.isdir(path)):
+        if real in real_seen:
             continue
         real_seen.add(real)
-        account = read_account(f"{folder}/.claude.json" if folder else f"{HOME}/.claude.json")
+        account = read_account(f"{folder}/.claude.json" if folder else f"{HOME}/.claude.json") if exists else {}
         uuid = account.get("accountUuid")
         if uuid in uuid_seen:
             continue   # zweimal dieselbe Anmeldung: sonst doppelte Abfragen gegen dasselbe Rate-Limit
@@ -75,8 +92,37 @@ def discover_accounts():
         email, name = account.get("emailAddress") or "", account.get("displayName") or ""
         label = email.split("@")[0] or name or (os.path.basename(folder).lstrip(".") if folder else "Standard")
         accounts.append({"id": f"claude@{folder_hash(folder)}" if folder else "claude",
-                         "folder": folder, "dir": path, "label": label})
+                         "folder": folder, "dir": path, "label": label, "source": source,
+                         "state": OK if exists else MISSING_FOLDER})
     return accounts
+
+
+def worst_pct(info):
+    """Höchster Prozentwert eines Stands, None ohne Stand oder ohne Limits."""
+    return max((l["pct"] for l in (info or {}).get("limits") or []), default=None)
+
+
+def tightest_id(accounts):
+    """[{id, info}] -> ID des knappsten Kontos (höchstes Limit, bei Gleichstand das frühere);
+    hat keins einen Stand, das erste; ohne Konten None."""
+    best, best_pct = None, None
+    for account in accounts:
+        pct = worst_pct(account.get("info"))
+        if pct is not None and (best_pct is None or pct > best_pct):
+            best, best_pct = account["id"], pct
+    return best or (accounts[0]["id"] if accounts else None)
+
+
+def account_view(account, info, error, count):
+    """Eintrag für die Anzeige. problem = grau mit „!“: Ordner fehlt, oder Abruffehler ohne Stand."""
+    missing = account["state"] == MISSING_FOLDER
+    return {"id": account["id"], "label": account["label"], "state": account["state"],
+            "title": f"Claude · {account['label']}" if count > 1 else "Claude",
+            "folder": short_path(account["dir"]) if account["folder"] else None,
+            "info": info, "error": error, "pct": worst_pct(info),
+            "problem": missing or (not info and bool(error)),
+            "missing": MISSING_FOLDER_TEXT.format(path=short_path(account["dir"])) if missing else None,
+            "missingHint": MISSING_FOLDER_HINT if missing else None}
 
 
 def claude_command(account, args=""):
@@ -212,7 +258,8 @@ def collect_usage(accounts, days=31):
 def read_cache():
     """-> {"accounts": {id: {info, attemptedAt, retryAt, error}}}"""
     try:
-        d = json.load(open(LIMITS_CACHE))
+        with open(LIMITS_CACHE) as f:
+            d = json.load(f)
     except (OSError, ValueError):
         return {"accounts": {}}
     if not isinstance(d, dict):
@@ -247,6 +294,8 @@ def save_entry(account, entry):
 
 def limits_with_cache(account):
     """-> (Stand, Fehlertext) eines Kontos. Fragt nur ab, wenn dessen letzte Abfrage lang genug her ist."""
+    if account.get("state") == MISSING_FOLDER:
+        return None, None   # Ordner fehlt: nicht abfragen, die Seite erklärt es
     now = time.time()
     entry = read_cache()["accounts"].get(account["id"]) or {}
     info = entry.get("info")
@@ -287,16 +336,19 @@ def limits_with_cache(account):
 
 
 def main():
-    """Ein Eintrag je Konto unter „accounts“; „title“ ist „Claude“ oder bei mehreren Konten „Claude · frank“."""
-    result = {"error": None, "priceDate": PRICES_AS_OF, "accounts": []}
+    """Ein Eintrag je Konto unter „accounts“ (Felder aus account_view plus Stand), „tightest“ = ID des
+    knappsten Kontos (beim Öffnen gewählt), „usageAccounts“ = Zahl der Konten, deren Protokolle zählen."""
+    result = {"error": None, "priceDate": PRICES_AS_OF, "accounts": [], "tightest": None, "usageAccounts": 0}
     accounts = discover_accounts()
-    for account in accounts:
-        info, error = limits_with_cache(account)
-        title = f"Claude · {account['label']}" if len(accounts) > 1 else "Claude"
-        result["accounts"].append({"id": account["id"], "label": account["label"], "title": title, "error": error,
-                                   **(info or {"plan": "", "limits": [], "extra": None})})
+    views = [account_view(account, *limits_with_cache(account), len(accounts)) for account in accounts]
+    result["tightest"] = tightest_id(views)
+    for view in views:
+        info = view.pop("info")
+        result["accounts"].append({**view, **(info or NO_INFO)})
+    usable = [account for account in accounts if account["state"] == OK]
+    result["usageAccounts"] = len(usable)
     try:
-        result["usage"] = collect_usage(accounts)
+        result["usage"] = collect_usage(usable)
     except Exception as e:
         result["usage"] = []
         result["error"] = f"Verbrauch: {type(e).__name__}"

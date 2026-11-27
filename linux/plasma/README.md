@@ -22,17 +22,31 @@ and `rsync`. Same data sources as the other versions:
 
 Every `CLAUDE_CONFIG_DIR` is an account of its own (SPEC §6 "Mehrere Konten je Anbieter"):
 
-- Found automatically: `~/.claude` (default account) plus every `~/.claude-*` or `~/.claude_*`
-  folder that contains a `.claude.json`, and the folder in `CLAUDE_CONFIG_DIR` if it is set.
-  Further folders: `TOKENSTATS_CLAUDE_DIRS=/path/one:/path/two`. The same folder (also via a
-  symlink) and the same login (`accountUuid`) count once.
+- Found automatically: `~/.claude` (default account, if the folder exists) plus every `~/.claude-*`
+  or `~/.claude_*` folder that contains a `.claude.json`, and the folder in `CLAUDE_CONFIG_DIR` if
+  it is set. Further folders: `TOKENSTATS_CLAUDE_DIRS=/path/one:/path/two`. Order: default,
+  found automatically, then the folders from the variables. The same folder (also via a symlink)
+  and the same login (`accountUuid`) count once.
 - Limits per account, from `<folder>/.credentials.json`, with their own 300 s interval and
-  `Retry-After`. One tab per account ("Claude · frank", label = local part of the email, else
-  the display name, else the folder name); with a single account nothing changes. Hints name the
-  folder, e.g. `CLAUDE_CONFIG_DIR=~/.claude-2 claude` starten.
+  `Retry-After`. The provider bar keeps one fixed entry "Claude" on both pages; its dot shows the
+  tightest account. Below it, on "Limits" and with two or more accounts, an account bar that wraps
+  onto further lines: one button per account with a state dot (colour of its tightest limit, grey
+  without values) and the label in full (local part of the email, else the display name, else the
+  folder name). The selected account is outlined in the accent colour; an account with a problem
+  (folder missing, or a request error without earlier values) is grey with "!". Opening the popup
+  selects the tightest account. The page heading reads "Claude · frank" (only "Claude" with a
+  single account) and may wrap; nothing is shortened. Hints name the folder, e.g.
+  `CLAUDE_CONFIG_DIR=~/.claude-2 claude` starten.
+- A folder from `TOKENSTATS_CLAUDE_DIRS` or `CLAUDE_CONFIG_DIR` that does not exist (an unmounted
+  drive, say) stays in the account bar, grey with "!", and is never queried. Its page says
+  "Ordner nicht gefunden: {pfad}. Ist das Laufwerk eingehängt, erscheint das Konto von selbst
+  wieder." and "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfernen, wenn es ihn nicht mehr
+  gibt." Automatically found folders only count while they exist.
+- No account at all: "Kein Claude-Konto gefunden" with "Melde dich mit »claude« an. Weitere Ordner:
+  TOKENSTATS_CLAUDE_DIRS=/pfad/eins:/pfad/zwei".
 - Usage stays per provider: the logs name no account and `projects` is often shared by symlink,
-  so the "Verbrauch" page adds up the `projects` folders of all accounts (each real path once,
-  messages deduplicated by id).
+  so the "Verbrauch" page has no account bar and adds up the `projects` folders of all accounts
+  (each real path once, messages deduplicated by id; missing folders are left out of the count).
 - An expired token (`expiresAt` in the past) is reported without a request.
 
 ## Install
@@ -48,9 +62,11 @@ Test without the panel: `plasmawindowed org.tokenstats.claude`.
 
 ## Layout
 
-- `contents/code/backend.py` prints one JSON document (`accounts` with limits and plan each,
-  31 days of usage); the
+- `contents/code/backend.py` prints one JSON document (`accounts` with state, limits and plan
+  each, `tightest` = the account selected on opening, `usageAccounts`, 31 days of usage); the
   widget runs it every 5 minutes through the `executable` data engine.
+- Tests for the account logic of both Linux variants (no Qt or GTK needed):
+  `python3 -I -m unittest discover -s linux/tests -v`.
 - `contents/code/util.js` formatting and aggregation; `contents/ui/*.qml` the views.
 
 ## Limits of this version

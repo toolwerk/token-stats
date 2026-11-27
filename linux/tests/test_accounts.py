@@ -1,0 +1,303 @@
+"""Tests der Kontologik beider Linux-Fassungen (Plasma-Backend und GTK), ohne GTK, Qt oder Netz.
+
+Lauf aus dem Repo: python3 -I -m unittest discover -s linux/tests -v
+
+Alle Ordner liegen in einem temporären HOME, alle Namen sind Demo-Werte. Abfragen an den Endpunkt sind
+in jedem Test verboten (urlopen und fetch_limits schlagen fehl, falls sie doch aufgerufen werden).
+"""
+import contextlib
+import importlib.util
+import io
+import json
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+LINUX = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BACKEND = os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "code", "backend.py")
+GTK = os.path.join(LINUX, "gtk", "tokenstats.py")
+
+# Texte aus dem Textkatalog „Mehrere Konten“, Abschnitt „Linux“
+MISSING_TEXT = ("Ordner nicht gefunden: {path}. "
+                "Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.")
+MISSING_HINT = "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfernen, wenn es ihn nicht mehr gibt."
+EMPTY_TITLE = "Kein Claude-Konto gefunden"
+EMPTY_TEXT = "Melde dich mit »claude« an. Weitere Ordner: TOKENSTATS_CLAUDE_DIRS=/pfad/eins:/pfad/zwei"
+
+_IMPORT_HOME = tempfile.mkdtemp(prefix="tokenstats-import-")
+
+
+def _load(name, path):
+    # HOME beim Import auf einen leeren Ordner, damit auch die Cache-Pfade der Module nie ins echte Home zeigen
+    with mock.patch.dict(os.environ, {"HOME": _IMPORT_HOME}):
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    return module
+
+
+backend = _load("tokenstats_backend", BACKEND)
+gtk = _load("tokenstats_gtk", GTK)
+MODULES = {"backend": backend, "gtk": gtk}
+
+
+def tearDownModule():
+    shutil.rmtree(_IMPORT_HOME, ignore_errors=True)
+
+
+def _no_request(*_args, **_kwargs):
+    raise AssertionError("Endpunkt darf im Test nicht abgefragt werden")
+
+
+class Home:
+    """Temporäres HOME mit Claude-Ordnern; patcht HOME und Cache-Pfade beider Module."""
+
+    def __init__(self, test):
+        self.root = tempfile.mkdtemp(prefix="tokenstats-home-")
+        test.addCleanup(shutil.rmtree, self.root, True)
+        self.cache = os.path.join(self.root, ".cache", "tokenstats")
+        for module in MODULES.values():
+            test.enterContext(mock.patch.object(module, "HOME", self.root))
+            test.enterContext(mock.patch.object(module, "LIMITS_CACHE", os.path.join(self.cache, "limits.json")))
+            test.enterContext(mock.patch.object(module, "fetch_limits", _no_request))
+        test.enterContext(mock.patch.object(backend, "CACHE_DIR", self.cache))
+        test.enterContext(mock.patch.object(gtk, "ICON_DIR", self.cache))
+        test.enterContext(mock.patch("urllib.request.urlopen", _no_request))
+        test.enterContext(mock.patch.dict(os.environ, {"HOME": self.root}))
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
+        os.environ.pop("TOKENSTATS_CLAUDE_DIRS", None)
+
+    def path(self, name):
+        return os.path.join(self.root, name)
+
+    def folder(self, name, email=None, uuid=None, claude_json=True):
+        """Konfigurationsordner wie von `CLAUDE_CONFIG_DIR=<ordner> claude`; name relativ zum HOME."""
+        path = self.path(name)
+        os.makedirs(path, exist_ok=True)
+        if claude_json:
+            account = {"emailAddress": email, "accountUuid": uuid} if email or uuid else {}
+            # Standardkonto: .claude.json liegt neben ~/.claude, sonst im Ordner
+            target = self.path(".claude.json") if name == ".claude" else os.path.join(path, ".claude.json")
+            with open(target, "w") as f:
+                json.dump({"oauthAccount": account}, f)
+        return path
+
+    def manual(self, *paths, config_dir=None):
+        os.environ["TOKENSTATS_CLAUDE_DIRS"] = ":".join(paths)
+        if config_dir is not None:
+            os.environ["CLAUDE_CONFIG_DIR"] = config_dir
+
+
+def summary(accounts):
+    return [(a["label"], a["source"], a["state"]) for a in accounts]
+
+
+class DiscoveryTest(unittest.TestCase):
+    def each(self):
+        for name, module in MODULES.items():
+            with self.subTest(module=name):
+                yield module
+
+    def test_order_default_auto_manual(self):
+        home = Home(self)
+        home.folder(".claude", email="privat@example.com", uuid="u-privat")
+        home.folder(".claude-arbeit", email="arbeit@example.com", uuid="u-arbeit")
+        home.folder(".claude-ohne-anmeldung", claude_json=False)   # ohne .claude.json: nicht automatisch
+        kunde = home.folder("konten/kunde-a", email="kunde-a@example.com", uuid="u-kunde")
+        home.manual(kunde, home.path("usb/claude-fehlt"))
+        for module in self.each():
+            self.assertEqual(summary(module.discover_accounts()), [
+                ("privat", "default", "ok"),
+                ("arbeit", "auto", "ok"),
+                ("kunde-a", "manual", "ok"),
+                ("claude-fehlt", "manual", "missingFolder"),
+            ])
+
+    def test_missing_manual_folder_stays_with_stable_id(self):
+        home = Home(self)
+        home.folder(".claude", email="privat@example.com")
+        gone = home.path("usb/claude-arbeit")
+        home.manual(gone)
+        for module in self.each():
+            accounts = module.discover_accounts()
+            self.assertEqual(len(accounts), 2)
+            missing = accounts[1]
+            self.assertEqual(missing["state"], "missingFolder")
+            self.assertEqual(missing["id"], f"claude@{module.folder_hash(gone)}")
+            self.assertEqual(missing["label"], "claude-arbeit")
+
+    def test_missing_config_dir_is_manual_too(self):
+        home = Home(self)
+        home.folder(".claude", email="privat@example.com")
+        home.manual(config_dir=home.path(".claude-kunde-a"))   # Name wie automatisch, aber nicht vorhanden
+        for module in self.each():
+            self.assertEqual(summary(module.discover_accounts())[1], ("claude-kunde-a", "manual", "missingFolder"))
+
+    def test_no_default_folder_no_account(self):
+        Home(self)
+        for module in self.each():
+            self.assertEqual(module.discover_accounts(), [])
+
+    def test_default_without_claude_json_is_kept(self):
+        home = Home(self)
+        home.folder(".claude", claude_json=False)
+        for module in self.each():
+            self.assertEqual(summary(module.discover_accounts()), [("Standard", "default", "ok")])
+
+    def test_duplicates_count_once(self):
+        home = Home(self)
+        home.folder(".claude", email="privat@example.com", uuid="u-privat")
+        arbeit = home.folder(".claude-arbeit", email="arbeit@example.com", uuid="u-arbeit")
+        link = home.path("link-arbeit")
+        os.symlink(arbeit, link)
+        same_login = home.folder("kopie", email="privat@example.com", uuid="u-privat")
+        gone = home.path("weg")
+        home.manual(link, arbeit + "/", same_login, gone, gone)
+        for module in self.each():
+            self.assertEqual([a["label"] for a in module.discover_accounts()], ["privat", "arbeit", "weg"])
+
+
+class SelectionTest(unittest.TestCase):
+    @staticmethod
+    def info(*pcts):
+        return {"plan": "Max 5×", "limits": [{"title": "Session", "pct": p} for p in pcts], "extra": None}
+
+    def test_tightest_over_all_accounts(self):
+        accounts = [{"id": "claude", "info": self.info(20, 40)},
+                    {"id": "claude@aaaaaaaa", "info": self.info(10, 91)},
+                    {"id": "claude@bbbbbbbb", "info": None},
+                    {"id": "claude@cccccccc", "info": self.info(91)}]
+        for name, module in MODULES.items():
+            with self.subTest(module=name):
+                self.assertEqual(module.tightest_id(accounts), "claude@aaaaaaaa")   # Gleichstand: das frühere
+                self.assertEqual(module.tightest_id([{"id": "claude", "info": None},
+                                                     {"id": "claude@aaaaaaaa", "info": self.info()}]), "claude")
+                self.assertIsNone(module.tightest_id([]))
+                self.assertIsNone(module.worst_pct(self.info()))
+                self.assertEqual(module.worst_pct(self.info(3, 7.5)), 7.5)
+
+    def test_pick_account(self):
+        accounts = [{"id": "claude", "info": self.info(20)}, {"id": "claude@aaaaaaaa", "info": self.info(60)}]
+        self.assertEqual(gtk.pick_account(accounts, "claude")["id"], "claude")
+        self.assertEqual(gtk.pick_account(accounts, None)["id"], "claude@aaaaaaaa")
+        self.assertEqual(gtk.pick_account(accounts, "claude@weg")["id"], "claude@aaaaaaaa")
+        self.assertIsNone(gtk.pick_account([], None))
+
+
+class ViewTest(unittest.TestCase):
+    """account_view: Zustandspunkt, „!“ und Texte der Seite."""
+
+    def view(self, module, account, info, error, count=2):
+        v = module.account_view(account, info, error, count)
+        v["error"] = v.pop("error", None) or v.pop("note", None)
+        return v
+
+    def test_missing_folder_view(self):
+        home = Home(self)
+        home.folder(".claude", email="privat@example.com")
+        home.manual(home.path("usb/claude-arbeit"))
+        for name, module in MODULES.items():
+            with self.subTest(module=name):
+                missing = module.discover_accounts()[1]
+                v = self.view(module, missing, *module.limits_with_cache(missing))
+                self.assertTrue(v["problem"])
+                self.assertIsNone(v["pct"])
+                self.assertEqual(v["title"], "Claude · claude-arbeit")
+                self.assertEqual(v["missing"], MISSING_TEXT.format(path="~/usb/claude-arbeit"))
+                self.assertEqual(v["missingHint"], MISSING_HINT)
+
+    def test_problem_flags(self):
+        account = {"id": "claude", "folder": None, "dir": "/x/.claude", "label": "privat", "state": "ok"}
+        info = SelectionTest.info(85)
+        for name, module in MODULES.items():
+            with self.subTest(module=name):
+                fetch_error = self.view(module, account, None, "HTTP 500")
+                self.assertTrue(fetch_error["problem"])
+                paused = self.view(module, account, info, "Abfrage pausiert (Rate-Limit) · wieder ab 12:00")
+                self.assertFalse(paused["problem"])   # letzter Stand bleibt sichtbar
+                self.assertEqual(paused["pct"], 85)
+                loading = self.view(module, account, None, None)
+                self.assertFalse(loading["problem"])
+                self.assertIsNone(loading["missing"])
+                self.assertEqual(self.view(module, account, info, None, count=1)["title"], "Claude")
+
+    def test_catalog_texts(self):
+        for name, module in MODULES.items():
+            with self.subTest(module=name):
+                self.assertEqual(module.MISSING_FOLDER_TEXT, MISSING_TEXT)
+                self.assertEqual(module.MISSING_FOLDER_HINT, MISSING_HINT)
+        self.assertEqual(gtk.EMPTY_TITLE, EMPTY_TITLE)
+        self.assertEqual(gtk.EMPTY_TEXT, EMPTY_TEXT)
+        with open(os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "ui", "FullView.qml")) as f:
+            qml = f.read()
+        self.assertIn(f'"{EMPTY_TITLE}"', qml)
+        self.assertIn(f'"{EMPTY_TEXT}"', qml)
+        self.assertNotIn("Elide", qml.replace("Text.ElideNone", ""))
+
+
+class NoRequestTest(unittest.TestCase):
+    def test_missing_folder_is_not_queried(self):
+        home = Home(self)
+        gone = home.path("usb/claude-arbeit")
+        home.manual(gone)
+        for name, module in MODULES.items():
+            with self.subTest(module=name):
+                account = module.discover_accounts()[0]
+                self.assertEqual(module.limits_with_cache(account), (None, None))
+                self.assertFalse(os.path.exists(module.LIMITS_CACHE))   # auch kein Versuch vermerkt
+
+    def test_account_without_credentials_needs_no_request(self):
+        home = Home(self)
+        home.folder(".claude-arbeit", email="arbeit@example.com")
+        for name, module in MODULES.items():
+            with self.subTest(module=name):
+                account = module.discover_accounts()[0]
+                info, error = module.limits_with_cache(account)
+                self.assertIsNone(info)
+                self.assertEqual(error, "Nicht angemeldet: `CLAUDE_CONFIG_DIR=~/.claude-arbeit claude` starten")
+
+
+class BackendOutputTest(unittest.TestCase):
+    def run_main(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            backend.main()
+        return json.loads(out.getvalue())
+
+    def test_output_with_missing_folder(self):
+        home = Home(self)
+        home.folder(".claude", email="privat@example.com", uuid="u-privat")
+        kunde = home.folder("kunde-a", email="kunde-a@example.com", uuid="u-kunde")
+        home.manual(kunde, home.path("usb/claude-arbeit"))
+        # Stand im Cache, frisch genug: kein Abruf
+        os.makedirs(home.cache)
+        now = backend.time.time()
+        cached = {"accounts": {
+            "claude": {"info": SelectionTest.info(30), "attemptedAt": now, "retryAt": 0, "error": None},
+            f"claude@{backend.folder_hash(kunde)}": {"info": SelectionTest.info(88), "attemptedAt": now,
+                                                     "retryAt": 0, "error": None}}}
+        with open(backend.LIMITS_CACHE, "w") as f:
+            json.dump(cached, f)
+        result = self.run_main()
+        self.assertEqual([a["title"] for a in result["accounts"]],
+                         ["Claude · privat", "Claude · kunde-a", "Claude · claude-arbeit"])
+        self.assertEqual(result["tightest"], f"claude@{backend.folder_hash(kunde)}")
+        self.assertEqual(result["usageAccounts"], 2)
+        missing = result["accounts"][2]
+        self.assertEqual((missing["state"], missing["problem"], missing["pct"], missing["limits"]),
+                         ("missingFolder", True, None, []))
+        self.assertEqual(missing["missing"], MISSING_TEXT.format(path="~/usb/claude-arbeit"))
+        self.assertEqual(result["accounts"][1]["pct"], 88)
+        self.assertFalse(result["accounts"][1]["problem"])
+
+    def test_output_empty(self):
+        Home(self)
+        result = self.run_main()
+        self.assertEqual((result["accounts"], result["tightest"], result["usageAccounts"]), ([], None, 0))
+
+
+if __name__ == "__main__":
+    unittest.main()

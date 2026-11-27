@@ -19,17 +19,31 @@ Wayland only; the notes on other desktops in the README one level up are expecta
 
 Every `CLAUDE_CONFIG_DIR` is an account of its own (SPEC §6 "Mehrere Konten je Anbieter"):
 
-- Found automatically: `~/.claude` (default account) plus every `~/.claude-*` or `~/.claude_*`
-  folder that contains a `.claude.json`, and the folder in `CLAUDE_CONFIG_DIR` if it is set.
-  Further folders: `TOKENSTATS_CLAUDE_DIRS=/path/one:/path/two`. The same folder (also via a
-  symlink) and the same login (`accountUuid`) count once.
+- Found automatically: `~/.claude` (default account, if the folder exists) plus every `~/.claude-*`
+  or `~/.claude_*` folder that contains a `.claude.json`, and the folder in `CLAUDE_CONFIG_DIR` if
+  it is set. Further folders: `TOKENSTATS_CLAUDE_DIRS=/path/one:/path/two`. Order: default,
+  found automatically, then the folders from the variables. The same folder (also via a symlink)
+  and the same login (`accountUuid`) count once.
 - Limits per account, from `<folder>/.credentials.json`, with their own 300 s interval and
-  `Retry-After`. One tab per account ("Claude · frank", label = local part of the email, else
-  the display name, else the folder name); with a single account nothing changes. Hints name the
-  folder, e.g. `CLAUDE_CONFIG_DIR=~/.claude-2 claude` starten.
+  `Retry-After`. The provider bar keeps one fixed entry "Claude" on both pages; its dot shows the
+  tightest account. Below it, on "Limits" and with two or more accounts, an account bar that wraps
+  onto further lines: one button per account with a state dot (colour of its tightest limit, grey
+  without values) and the label in full (local part of the email, else the display name, else the
+  folder name). The selected account is outlined in the accent colour; an account with a problem
+  (folder missing, or a request error without earlier values) is grey with "!". Opening the popup
+  selects the tightest account. The page heading reads "Claude · frank" (only "Claude" with a
+  single account) and may wrap; nothing is shortened. Hints name the folder, e.g.
+  `CLAUDE_CONFIG_DIR=~/.claude-2 claude` starten.
+- A folder from `TOKENSTATS_CLAUDE_DIRS` or `CLAUDE_CONFIG_DIR` that does not exist (an unmounted
+  drive, say) stays in the account bar, grey with "!", and is never queried. Its page says
+  "Ordner nicht gefunden: {pfad}. Ist das Laufwerk eingehängt, erscheint das Konto von selbst
+  wieder." and "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfernen, wenn es ihn nicht mehr
+  gibt." Automatically found folders only count while they exist.
+- No account at all: "Kein Claude-Konto gefunden" with "Melde dich mit »claude« an. Weitere Ordner:
+  TOKENSTATS_CLAUDE_DIRS=/pfad/eins:/pfad/zwei".
 - Usage stays per provider: the logs name no account and `projects` is often shared by symlink,
-  so the "Verbrauch" page adds up the `projects` folders of all accounts (each real path once,
-  messages deduplicated by id).
+  so the "Verbrauch" page has no account bar and adds up the `projects` folders of all accounts
+  (each real path once, messages deduplicated by id; missing folders are left out of the count).
 - An expired token (`expiresAt` in the past) is reported without a request.
 
 ## Install and run
@@ -56,6 +70,9 @@ Run it from a checkout, because it reads the price table from `Sources/`. For au
 - Plasma reports the icon position in physical pixels and sends every click twice. The script
   converts with the scale from `kscreen-doctor -j` and ignores calls within 400 ms.
 - Refreshes every 5 minutes, and never more often than every 300 s: the refresh button and a restart use the cache (`~/.cache/tokenstats/limits.json`, shared with the Plasma widget) while the last request is younger. On HTTP 429 the last values stay and the note shows when the next request is allowed (`Retry-After`).
+
+The data part of `tokenstats.py` imports without GTK, so the account logic is tested together with
+the Plasma backend: `python3 -I -m unittest discover -s linux/tests -v`.
 
 ## Limits of this version
 

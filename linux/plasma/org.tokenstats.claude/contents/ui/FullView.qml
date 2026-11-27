@@ -9,15 +9,23 @@ ColumnLayout {
     id: view
     property var info: null
     property var updated: null
+    property bool expanded: false
     signal refreshRequested()
 
     property string page: "limits"
     property int rangeDays: 7
     property int now: 0   // bumped by a timer so "resets in" and pace texts stay current
-    // one tab per account on "Limits"; "Verbrauch" is per provider, the logs name no account
-    property int current: 0
+    // gewähltes Konto auf „Limits“ (ID); leer oder verschwunden = das knappste. „Verbrauch“ gilt je Anbieter,
+    // die Protokolle nennen kein Konto
+    property string currentId: ""
     readonly property var accounts: info && info.accounts ? info.accounts : []
-    readonly property var acc: accounts.length ? accounts[Math.min(current, accounts.length - 1)] : null
+    readonly property var tightestAcc: accountById(info && info.tightest ? info.tightest : "") || (accounts.length ? accounts[0] : null)
+    readonly property var acc: accountById(currentId) || tightestAcc
+    // Konten, deren Protokolle zählen (ohne fehlende Ordner)
+    readonly property int usageAccounts: info && info.usageAccounts !== undefined ? info.usageAccounts : accounts.length
+
+    // beim Öffnen ist das knappste Konto gewählt
+    onExpandedChanged: if (expanded) currentId = info && info.tightest ? info.tightest : ""
 
     spacing: 0
     Layout.preferredWidth: Kirigami.Units.gridUnit * 24
@@ -26,6 +34,15 @@ ColumnLayout {
     function tint(pct) {
         return pct >= 100 ? Kirigami.Theme.negativeTextColor
              : pct >= 80 ? Kirigami.Theme.neutralTextColor : Kirigami.Theme.positiveTextColor
+    }
+    function accountById(id) {
+        for (var i = 0; i < accounts.length; i++)
+            if (accounts[i].id === id) return accounts[i]
+        return null
+    }
+    // Zustandspunkt: Farbe des knappsten Limits, grau ohne Stand und bei Fehlerkonten
+    function dotColor(a) {
+        return !a || a.problem || a.pct === null || a.pct === undefined ? Kirigami.Theme.disabledTextColor : tint(a.pct)
     }
 
     // header: title and page switch
@@ -39,20 +56,82 @@ ColumnLayout {
             PC3.Button { text: "Verbrauch"; checkable: true; checked: view.page === "usage"; autoExclusive: true; onClicked: view.page = "usage" }
         }
     }
+    // Anbieter-Leiste: ein fester Eintrag „Claude“ auf beiden Seiten, der Punkt zeigt das knappste Konto
     PC3.TabBar {
-        id: tabBar
         Layout.fillWidth: true
-        // a click sets currentIndex itself and would break a plain binding; Binding re-applies it
-        Binding on currentIndex {
-            value: view.page === "limits" ? Math.max(0, Math.min(view.current, view.accounts.length - 1)) : 0
+        PC3.TabButton {
+            text: "Claude"
+            checked: true
+            contentItem: RowLayout {
+                spacing: Kirigami.Units.smallSpacing
+                Item { Layout.fillWidth: true }
+                PC3.Label { text: "●"; color: view.dotColor(view.tightestAcc) }
+                PC3.Label { text: "Claude" }
+                Item { Layout.fillWidth: true }
+            }
         }
+    }
+    // Kontoleiste: nur auf „Limits“ und ab zwei Konten; bricht um, nichts wird gekürzt
+    Flow {
+        id: accountBar
+        visible: view.page === "limits" && view.accounts.length > 1
+        Layout.fillWidth: true
+        Layout.leftMargin: Kirigami.Units.largeSpacing
+        Layout.rightMargin: Kirigami.Units.largeSpacing
+        Layout.topMargin: Kirigami.Units.smallSpacing
+        Layout.bottomMargin: Kirigami.Units.largeSpacing
+        spacing: Kirigami.Units.smallSpacing
         Repeater {
-            model: view.page === "limits" && view.accounts.length > 1 ? view.accounts : [{ title: "Claude" }]
-            PC3.TabButton {
+            model: view.accounts
+            QQC2.AbstractButton {
+                id: chip
                 required property var modelData
-                required property int index
-                text: "● " + modelData.title
-                onClicked: if (view.page === "limits") view.current = index
+                readonly property bool selected: view.acc !== null && view.acc.id === modelData.id
+                readonly property color fg: modelData.problem ? Kirigami.Theme.disabledTextColor : Kirigami.Theme.textColor
+                // „!“ nur als Zeichen; für Screenreader steht der Zustand in der Beschreibung
+                text: modelData.label
+                Accessible.description: modelData.problem ? "Fehler" : ""
+                hoverEnabled: true
+                // AbstractButton ist die Vorlage ohne eigene Größe; wie bei QQC2.Button aus Inhalt und Rand
+                implicitWidth: Math.max(implicitBackgroundWidth + leftInset + rightInset,
+                                        implicitContentWidth + leftPadding + rightPadding)
+                implicitHeight: Math.max(implicitBackgroundHeight + topInset + bottomInset,
+                                         implicitContentHeight + topPadding + bottomPadding)
+                width: Math.min(implicitWidth, accountBar.width)
+                topPadding: Kirigami.Units.smallSpacing
+                bottomPadding: Kirigami.Units.smallSpacing
+                leftPadding: Kirigami.Units.largeSpacing
+                rightPadding: Kirigami.Units.largeSpacing
+                onClicked: view.currentId = modelData.id
+                background: Rectangle {
+                    radius: Kirigami.Units.smallSpacing * 2
+                    readonly property color hl: Kirigami.Theme.highlightColor
+                    readonly property color tc: Kirigami.Theme.textColor
+                    color: chip.selected ? Qt.rgba(hl.r, hl.g, hl.b, 0.2)
+                         : chip.hovered ? Qt.rgba(tc.r, tc.g, tc.b, 0.08) : "transparent"
+                    border.width: 1
+                    border.color: chip.selected ? hl : Qt.rgba(tc.r, tc.g, tc.b, 0.25)
+                }
+                contentItem: RowLayout {
+                    spacing: Kirigami.Units.smallSpacing
+                    PC3.Label { text: "●"; color: view.dotColor(chip.modelData); Layout.alignment: Qt.AlignTop }
+                    PC3.Label {
+                        text: chip.modelData.label
+                        color: chip.fg
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                        // Platz für Punkt und „!“ freihalten, der Rest bricht um
+                        Layout.maximumWidth: Math.max(Kirigami.Units.gridUnit * 2,
+                                                      accountBar.width - chip.leftPadding - chip.rightPadding - Kirigami.Units.gridUnit * 2)
+                    }
+                    PC3.Label {
+                        visible: chip.modelData.problem
+                        text: "!"
+                        font.bold: true
+                        color: chip.fg
+                        Layout.alignment: Qt.AlignTop
+                    }
+                }
             }
         }
     }
@@ -68,8 +147,10 @@ ColumnLayout {
             Loader {
                 Layout.fillWidth: true
                 Layout.margins: Kirigami.Units.largeSpacing
-                sourceComponent: !view.info || (view.page === "limits" && !view.acc) ? loading
-                               : view.page === "limits" ? limitsPage : usagePage
+                sourceComponent: !view.info ? loading
+                               : view.accounts.length === 0 ? emptyPage
+                               : view.page !== "limits" ? usagePage
+                               : view.acc.state === "missingFolder" ? missingPage : limitsPage
             }
         }
     }
@@ -81,7 +162,7 @@ ColumnLayout {
         Layout.margins: Kirigami.Units.largeSpacing
         PC3.Label {
             Layout.fillWidth: true
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
             opacity: 0.7
             text: (view.updated ? "Stand " + Qt.formatTime(view.updated, "hh:mm") : "lädt …")
                   + (warning ? "  ·  ⚠ " + warning : "")
@@ -94,13 +175,68 @@ ColumnLayout {
     Component { id: loading; PC3.Label { text: "Lädt …"; opacity: 0.7 } }
 
     Component {
+        id: emptyPage
+        ColumnLayout {
+            spacing: Kirigami.Units.largeSpacing
+            Kirigami.Heading {
+                text: "Kein Claude-Konto gefunden"
+                level: 3
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                elide: Text.ElideNone
+            }
+            PC3.Label {
+                text: "Melde dich mit »claude« an. Weitere Ordner: TOKENSTATS_CLAUDE_DIRS=/pfad/eins:/pfad/zwei"
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                opacity: 0.7
+            }
+        }
+    }
+
+    // Konto aus TOKENSTATS_CLAUDE_DIRS oder CLAUDE_CONFIG_DIR, dessen Ordner fehlt: wird nicht abgefragt
+    Component {
+        id: missingPage
+        ColumnLayout {
+            spacing: Kirigami.Units.largeSpacing
+            Kirigami.Heading {
+                text: view.acc.title
+                level: 3
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                elide: Text.ElideNone
+            }
+            PC3.Label {
+                text: view.acc.missing || ""
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: Kirigami.Theme.negativeTextColor
+            }
+            PC3.Label {
+                text: view.acc.missingHint || ""
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                opacity: 0.7
+            }
+        }
+    }
+
+    Component {
         id: limitsPage
         ColumnLayout {
             spacing: Kirigami.Units.largeSpacing * 1.5
             readonly property real worst: Math.max(0, Math.max.apply(null, view.acc.limits.map(function (l) { return l.pct })))
             RowLayout {
                 Layout.fillWidth: true
-                Kirigami.Heading { text: view.acc.title; level: 3 }
+                // darf zweizeilig werden: schrumpft erst, wenn der Platz nicht reicht, und bricht dann um
+                Kirigami.Heading {
+                    text: view.acc.title
+                    level: 3
+                    Layout.fillWidth: true
+                    Layout.maximumWidth: implicitWidth
+                    wrapMode: Text.Wrap
+                    elide: Text.ElideNone
+                }
                 PC3.Label { text: view.acc.plan; opacity: 0.7; font.family: "monospace" }
                 Item { Layout.fillWidth: true }
                 PC3.Label {
@@ -181,7 +317,7 @@ ColumnLayout {
             RowLayout {
                 Kirigami.Heading { text: "Claude"; level: 3 }
                 PC3.Label {
-                    text: view.accounts.length > 1 ? view.accounts.length + " Konten" : (view.acc ? view.acc.plan : "")
+                    text: view.usageAccounts > 1 ? view.usageAccounts + " Konten" : (view.acc ? view.acc.plan : "")
                     opacity: 0.7; font.family: "monospace"
                 }
             }
@@ -260,7 +396,7 @@ ColumnLayout {
                 opacity: 0.7
                 font.pointSize: Kirigami.Theme.smallFont.pointSize
                 text: "Lokal gezählte Tokens aus den Sitzungsprotokollen"
-                      + (view.accounts.length > 1 ? " aller " + view.accounts.length + " Konten zusammen (die Protokolle nennen kein Konto)" : "")
+                      + (view.usageAccounts > 1 ? " aller " + view.usageAccounts + " Konten zusammen (die Protokolle nennen kein Konto)" : "")
                       + " × Listenpreis"
                       + (view.info.priceDate ? " (Stand " + view.info.priceDate + ")" : "")
                       + ", inkl. Cache-Tarife. Keine Abrechnungsdaten – nur, was derselbe Verbrauch über die API gekostet hätte."
