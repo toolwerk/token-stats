@@ -350,6 +350,36 @@ class PartsTest(unittest.TestCase):
                          [{"kind": "text", "text": "Stand 12:00  ·  ⚠"}, {"kind": "cmd", "text": "claude"}])
 
 
+class InlineTest(unittest.TestCase):
+    """Kurze Befehle im Satz statt allein auf einer Zeile; Breiten des CommandLabel (GTK)."""
+
+    def test_short_command_joins_the_sentence(self):
+        parts = gtk.inline_parts(gtk.EMPTY_PARTS)
+        self.assertEqual([p["kind"] for p in parts], ["text", "cmd"])
+        self.assertEqual(parts[0]["text"], "Melde dich mit claude an. Weitere Ordner:")
+        self.assertEqual([s["mono"] for s in parts[0]["segments"]], [False, True, False])
+        self.assertEqual(parts[1]["text"], "TOKENSTATS_CLAUDE_DIRS=/pfad/eins:/pfad/zwei")   # lang: eigene Zeilen
+        self.assertEqual(gtk.segments_markup(parts[0]["segments"]),
+                         'Melde dich mit <span font_family="monospace">claude</span> an. Weitere Ordner:')
+
+    def test_commands_with_spaces_stay_apart(self):
+        parts = gtk.inline_parts(gtk.text_parts("Nicht angemeldet: »claude auth login« ausführen"))
+        self.assertEqual([p["kind"] for p in parts], ["text", "cmd", "text"])
+        self.assertEqual(gtk.inline_parts([{"kind": "cmd", "text": "claude"}]),
+                         [{"kind": "text", "text": "claude", "segments": [{"text": "claude", "mono": True}]}])
+
+    def test_markup_is_escaped(self):
+        self.assertEqual(gtk.segments_markup([{"text": "a<b & c>", "mono": False}]), "a&lt;b &amp; c&gt;")
+
+    def test_command_label_natural_width_never_below_minimum(self):
+        # GTK warnte: „min size 97 and natural size 49“ – »claude« ist kürzer als die 12 Zeichen Mindestbreite
+        self.assertEqual(gtk.command_label_widths(8, "claude", 12), (49, 49))
+        self.assertEqual(gtk.command_label_widths(8, "CLAUDE_CONFIG_DIR=~/.claude-arbeit claude", 12), (97, 329))
+        for command in ("x", "claude", "a b c", "CLAUDE_CONFIG_DIR=~/x claude auth login"):
+            low, natural = gtk.command_label_widths(7.5, command, 12)
+            self.assertLessEqual(low, natural, command)
+
+
 class WrapCommandTest(unittest.TestCase):
     """wrap_command: Befehle nie abschneiden, nie breiter als verfügbar; Plasma (util.js) rechnet gleich."""
     KUNDE = "CLAUDE_CONFIG_DIR=~/konten/kunde-a claude"

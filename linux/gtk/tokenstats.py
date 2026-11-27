@@ -112,6 +112,45 @@ def _command_break(text, limit):
     return limit
 
 
+# Kurze Befehle ohne Leerzeichen (»claude«) stehen im Satz statt allein auf einer Zeile („Melde dich mit claude an.“)
+INLINE_COMMAND_MAX = 16
+
+
+def inline_parts(parts, max_chars=INLINE_COMMAND_MAX):
+    """Teile -> Teile für die Anzeige: Text-Teile und kurze Befehle (ohne Leerzeichen, höchstens max_chars Zeichen)
+    werden zu einem Text-Teil mit „segments“ [{text, mono}] zusammengefasst (mit Leerzeichen verbunden; „text“
+    ist der ganze Satz ohne Auszeichnung). Längere Befehle bleiben eigene Teile (kind „cmd“, wrap_command)."""
+    out = []
+    for part in parts:
+        short = (part["kind"] == "cmd" and len(part["text"]) <= max_chars
+                 and not any(c.isspace() for c in part["text"]))
+        if part["kind"] != "text" and not short:
+            out.append(dict(part))
+            continue
+        segment = {"text": part["text"], "mono": part["kind"] == "cmd"}
+        if out and out[-1]["kind"] == "text":
+            out[-1]["segments"].append(segment)
+            out[-1]["text"] += " " + part["text"]
+        else:
+            out.append({"kind": "text", "text": part["text"], "segments": [segment]})
+    return out
+
+
+def segments_markup(segments):
+    """Segmente als Pango-Markup, Befehle in Monospace."""
+    def escape(text):
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return " ".join(f'<span font_family="monospace">{escape(seg["text"])}</span>' if seg["mono"] else escape(seg["text"])
+                    for seg in segments)
+
+
+def command_label_widths(char_width, command, min_chars):
+    """(Mindest-, natürliche) Breite eines CommandLabel in Pixeln: mindestens min_chars Zeichen, ein kürzerer
+    Befehl nur so breit wie er selbst – die natürliche Breite ist nie kleiner als die Mindestbreite."""
+    length = len(" ".join(str(command).split()))
+    return int(char_width * min(min_chars, length)) + 1, int(char_width * length) + 1
+
+
 def wrap_command(command, max_chars, indent=2):
     """Monospace-Befehl -> Zeilen mit höchstens max_chars Zeichen, Folgezeilen um indent Leerzeichen eingerückt
     (die Einrückung zählt mit). Bruch am letzten passenden Leerzeichen, sonst nach dem letzten „=“, sonst nach
@@ -623,8 +662,7 @@ class CommandLabel(Gtk.Label):
         return Gtk.SizeRequestMode.HEIGHT_FOR_WIDTH
 
     def do_get_preferred_width(self):
-        char_w = self.char_width()
-        return int(char_w * self.MIN_CHARS) + 1, int(char_w * len(" ".join(self.command.split()))) + 1
+        return command_label_widths(self.char_width(), self.command, self.MIN_CHARS)
 
     def do_get_preferred_height_for_width(self, width):
         height = self.create_pango_layout("\n".join(self.lines_for(width))).get_pixel_size()[1]
@@ -642,10 +680,16 @@ class CommandLabel(Gtk.Label):
 
 
 def parts_box(parts, css="ts-dim"):
-    """Satzteile umbrechend, Befehle (kind „cmd“) je auf eigenen Zeilen, siehe CommandLabel."""
+    """Satzteile umbrechend, kurze Befehle im Satz in Monospace (inline_parts), längere je auf eigenen Zeilen,
+    siehe CommandLabel."""
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-    for part in parts:
-        widget = CommandLabel(part["text"], css) if part["kind"] == "cmd" else label(part["text"], css, wrap=True)
+    for part in inline_parts(parts):
+        if part["kind"] == "cmd":
+            widget = CommandLabel(part["text"], css)
+        else:
+            widget = label(part["text"], css, wrap=True)
+            if any(seg["mono"] for seg in part["segments"]):
+                widget.set_markup(segments_markup(part["segments"]))
         box.pack_start(widget, False, False, 0)
     return box
 
