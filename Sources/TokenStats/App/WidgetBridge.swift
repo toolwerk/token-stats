@@ -87,15 +87,22 @@ final class WidgetBridge {
         return pendingNames.mapValues(\.name)
     }
 
-    /// Gemerkte Titel mit letztem Sichtdatum, aus den UserDefaults.
+    /// Gemerkte Titel mit letztem Sichtdatum, aus den UserDefaults. Die frühere Fassung
+    /// (`widgetAccountNames`, nur ID → Titel) wird einmal übernommen, mit „jetzt“ als letztem
+    /// Sichtdatum; der alte Schlüssel entfällt nach dem nächsten Schreiben.
     private var storedNames: [String: KnownAccountNames.Entry] {
-        guard let data = UserDefaults.standard.data(forKey: Self.accountNamesKey) else { return [:] }
-        return (try? JSONDecoder().decode([String: KnownAccountNames.Entry].self, from: data)) ?? [:]
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: Self.accountNamesKey) {
+            return (try? JSONDecoder().decode([String: KnownAccountNames.Entry].self, from: data)) ?? [:]
+        }
+        let legacy = defaults.dictionary(forKey: Self.legacyAccountNamesKey) as? [String: String] ?? [:]
+        return KnownAccountNames.migrate(legacy: legacy, now: .now)
     }
 
     private var pendingNames: [String: KnownAccountNames.Entry] = [:]
 
     private static let accountNamesKey = "widgetAccountNamesV2"
+    private static let legacyAccountNamesKey = "widgetAccountNames"
 
     /// Kurz sammeln: Mehrere Anbieter antworten oft innerhalb weniger Sekunden.
     private func schedule(_ snapshot: WidgetSnapshot) {
@@ -116,6 +123,7 @@ final class WidgetBridge {
             try snapshot.write()
             if !store.isDemo, let data = try? JSONEncoder().encode(pendingNames) {
                 UserDefaults.standard.set(data, forKey: Self.accountNamesKey)
+                UserDefaults.standard.removeObject(forKey: Self.legacyAccountNamesKey)
             }
             #if DEBUG
             NSLog("Token Stats: Widget-Stand geschrieben (%d Anbieter, %d Verbrauchszeilen)", snapshot.providers.count, snapshot.usage.count)
@@ -178,6 +186,11 @@ enum KnownAccountNames {
 
     static let keepFor: TimeInterval = 180 * 24 * 3600
     static let maxVanished = 50
+
+    /// Alte Fassung ohne Sichtdatum: alle Titel übernehmen, zuletzt gesehen „jetzt“.
+    static func migrate(legacy: [String: String], now: Date) -> [String: Entry] {
+        legacy.mapValues { Entry(name: $0, lastSeen: now) }
+    }
 
     static func merge(stored: [String: Entry], current: [String: String], now: Date) -> [String: Entry] {
         var result = current.mapValues { Entry(name: $0, lastSeen: now) }

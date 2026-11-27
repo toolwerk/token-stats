@@ -230,7 +230,6 @@ struct PopoverView: View {
                         .font(.system(size: 11.5, weight: .semibold))
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.horizontal, 4)
             }
             Spacer(minLength: 6)
             if let last = store.lastUpdate {
@@ -256,7 +255,8 @@ struct PopoverView: View {
                 openSettings()
             }
         }
-        .padding(.horizontal, Self.inset - 4)
+        // Gleicher Innenabstand links und rechts wie der übrige Inhalt (Dauerregel, Sven).
+        .padding(.horizontal, Self.inset)
         .padding(.vertical, 10)
         .background(.quaternary.opacity(0.5))
     }

@@ -231,14 +231,16 @@ private struct AccountsSection: View {
 
     // MARK: Zeilen
 
+    /// Kontozeile. Kopf mit Checkbox, Abzeichen und Knöpfen; Editor, Angaben und Hinweisflächen
+    /// darunter über die volle Zeilenbreite, damit alle Flächen an derselben Kante enden.
     private func accountRow(_ entry: AccountEntry, kind: AccountDiscovery.FolderKind) -> some View {
         let provider = entry.provider
         let missing = entry.status == .missingFolder
-        return HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 3) {
-                if editing == provider.id {
-                    editor(provider)
-                } else {
+        return VStack(alignment: .leading, spacing: 4) {
+            if editing == provider.id {
+                editor(provider)
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Toggle(isOn: visibility(provider)) {
                             Text(store.label(for: provider) ?? provider.displayName)
@@ -249,59 +251,67 @@ private struct AccountsSection: View {
                         .disabled(missing)
                         badge(provider.source.origin.badge)
                     }
-                }
-                VStack(alignment: .leading, spacing: 1) {
-                    if let email = provider.source.email ?? store.states[provider.id]?.snapshot?.account?.name {
-                        Text(email)
-                    }
-                    Text(folderText(provider, kind: kind)).font(.system(size: 11, design: .monospaced))
-                    if store.isHidden(provider.id) {
-                        Text("Ausgeblendet, wird nicht abgefragt.")
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-                .padding(.leading, 20)
-                switch entry.status {
-                case .missingFolder:
-                    notice("exclamationmark.triangle", "Ordner nicht gefunden. Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.", Severity.crit.color)
-                        .padding(.leading, 20)
-                case .notSignedIn:
-                    notice("exclamationmark.triangle", "Keine Anmeldung in diesem Ordner. Im Terminal »\(kind.signInCommand(folder: folderText(provider, kind: kind)))« starten.", Severity.warn.color)
-                        .padding(.leading, 20)
-                default:
-                    EmptyView()
+                    Spacer(minLength: 8)
+                    rowButtons(provider, showPencil: !missing)
                 }
             }
-            Spacer(minLength: 8)
-            // Feste Reihenfolge in jeder Zeile: „Entfernen“, ganz rechts der Stift. Fehlt der
-            // Stift (Ordner fehlt, Feld offen), hält ein unsichtbarer Platzhalter die Stelle.
-            if provider.source.origin == .manual, let path = provider.source.folder?.path {
-                Button("Entfernen") { removeFolder(path, kind: provider.kind) }
+            VStack(alignment: .leading, spacing: 1) {
+                if let email = provider.source.email ?? store.states[provider.id]?.snapshot?.account?.name {
+                    Text(email)
+                }
+                Text(folderText(provider, kind: kind)).font(.system(size: 11, design: .monospaced))
+                if store.isHidden(provider.id) {
+                    Text("Ausgeblendet, wird nicht abgefragt.")
+                }
             }
-            Button {
-                draft = store.customLabel(provider.id) ?? ""
-                editing = provider.id
-            } label: {
-                Image(systemName: "pencil")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+            .padding(.leading, 20)
+            switch entry.status {
+            case .missingFolder:
+                notice("exclamationmark.triangle", "Ordner nicht gefunden. Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.", Severity.crit.color)
+                    .padding(.leading, 20)
+            case .notSignedIn:
+                notice("exclamationmark.triangle", "Keine Anmeldung in diesem Ordner. Im Terminal »\(kind.signInCommand(folder: folderText(provider, kind: kind)))« starten.", Severity.warn.color)
+                    .padding(.leading, 20)
+            default:
+                EmptyView()
             }
-            .buttonStyle(.borderless)
-            .help("Bezeichnung ändern")
-            .accessibilityLabel("Bezeichnung ändern")
-            .opacity(missing || editing == provider.id ? 0 : 1)
-            .disabled(missing || editing == provider.id)
-            .accessibilityHidden(missing || editing == provider.id)
         }
     }
 
-    /// Feld über die volle Breite mit „Fertig“; Enter übernimmt, Esc bricht ab.
+    /// Feste Reihenfolge in jeder Zeile: „Entfernen“ (nur Ordner „von Hand“), ganz rechts der
+    /// Stift. Fehlt der Stift (Ordner fehlt), hält ein unsichtbarer Platzhalter die Stelle.
+    @ViewBuilder
+    private func rowButtons(_ provider: any UsageProvider, showPencil: Bool) -> some View {
+        if provider.source.origin == .manual, let path = provider.source.folder?.path {
+            Button("Entfernen") { removeFolder(path, kind: provider.kind) }
+        }
+        Button {
+            draft = store.customLabel(provider.id) ?? ""
+            editing = provider.id
+        } label: {
+            Image(systemName: "pencil")
+        }
+        .buttonStyle(.borderless)
+        .help("Bezeichnung ändern")
+        .accessibilityLabel("Bezeichnung ändern")
+        .opacity(showPencil ? 1 : 0)
+        .disabled(!showPencil)
+        .accessibilityHidden(!showPencil)
+    }
+
+    /// Feld mit Rand über die volle Zeilenbreite, „Fertig“ an der rechten Kante; Enter
+    /// übernimmt, Esc bricht ab.
     private func editor(_ provider: any UsageProvider) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 TextField("Bezeichnung", text: $draft, prompt: Text(provider.source.automaticLabel ?? "Bezeichnung"))
                     .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: .infinity)
                     .onSubmit { commit(provider) }
                     .onExitCommand { editing = nil }
                     .onChange(of: draft) {
@@ -340,14 +350,16 @@ private struct AccountsSection: View {
         if case .duplicate(let id) = entry.status, let first = store.provider(id: id) {
             owner = store.label(for: first) ?? first.displayName
         }
-        return HStack(alignment: .top, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 4) {
             notice("info.circle", "\(folderText(provider, kind: kind)) gehört zum selben Konto wie „\(owner)“ und wird nicht doppelt gezeigt.", .secondary)
-            Spacer(minLength: 8)
+            // „Entfernen“ in derselben Spalte wie in den Kontozeilen, die Fläche darüber volle Breite.
             if provider.source.origin == .manual, let path = provider.source.folder?.path {
-                Button("Entfernen") { removeFolder(path, kind: provider.kind) }
+                HStack(spacing: 8) {
+                    Spacer()
+                    Button("Entfernen") { removeFolder(path, kind: provider.kind) }
+                    Image(systemName: "pencil").opacity(0).accessibilityHidden(true)
+                }
             }
-            // Platzhalter für den Stift, damit „Entfernen“ wie in den Kontozeilen sitzt.
-            Image(systemName: "pencil").opacity(0).accessibilityHidden(true)
         }
     }
 

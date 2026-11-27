@@ -248,4 +248,14 @@ import TokenStatsCore
         #expect(merged.count == 1 + KnownAccountNames.maxVanished, "höchstens 50 verschwundene")
         #expect(merged[String(format: "claude@%08x", 59)] == nil, "die am längsten nicht gesehenen fallen zuerst")
     }
+
+    @Test func legacyAccountNamesAreTakenOverOnce() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let migrated = KnownAccountNames.migrate(legacy: ["claude@e5f6a7b8": "Claude · Kunde A"], now: now)
+        #expect(migrated == ["claude@e5f6a7b8": .init(name: "Claude · Kunde A", lastSeen: now)])
+        // Das übernommene Konto ist verschwunden, bleibt aber 180 Tage ab „jetzt“ beim Namen.
+        let merged = KnownAccountNames.merge(stored: migrated, current: ["claude": "Claude · Privat"],
+                                             now: now.addingTimeInterval(179 * 24 * 3600))
+        #expect(merged["claude@e5f6a7b8"]?.name == "Claude · Kunde A")
+    }
 }
