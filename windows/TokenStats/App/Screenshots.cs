@@ -2,6 +2,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using TokenStats.Model;
@@ -13,8 +14,10 @@ namespace TokenStats.App;
 
 /// <summary>
 /// <c>TOKENSTATS_SCREENSHOTS=&lt;Ordner&gt;</c>: rendert Popup und Tray-Symbol als PNG für die README,
-/// dazu das App-Symbol <c>TokenStats.ico</c>. Limits und Verbrauch sind Demo-Werte: keine Abfrage,
-/// kein Cache, keine Logs, keine Kontonamen.
+/// dazu das App-Symbol <c>TokenStats.ico</c>, Szenen mit mehreren Konten (Popup und Einstellungen,
+/// SPEC §6). Limits, Verbrauch und Konten sind Demo-Werte (<see cref="DemoAccounts"/>): keine Abfrage,
+/// keine Kontoerkennung, kein Cache, keine Logs, keine echten Kontonamen, Adressen oder Ordner.
+/// Einstellungen ohne Pfad: Bezeichnungen und Ausblenden wirken nur im Speicher.
 /// </summary>
 static class Screenshots
 {
@@ -23,8 +26,8 @@ static class Screenshots
         Directory.CreateDirectory(directory);
         var now = DateTimeOffset.Now;
         var settings = new AppSettings();
-        var store = new UsageStore([new ClaudeProvider(), new CodexProvider(), new AntigravityProvider(), new OllamaProvider()],
-                                   settings, cachePath: null);
+        // Keine echten Provider: Schon ihr Konstruktor liest die Kontodateien.
+        var store = new UsageStore([], settings, cachePath: null);
         var consumption = new ConsumptionStore(settings, ledgerPath: null);
         store.ShowDemo(DemoSnapshots(now));
         consumption.ShowDemo(DemoUsage(now, settings.BillingDay, consumption.Prices), DemoRtk(now, settings.BillingDay));
@@ -45,8 +48,119 @@ static class Screenshots
             view.Reset("claude", PopupPage.Usage);
             Save(Card(view.Build(), view.Palette), File("usage"));
             Save(Tray(DemoSnapshots(now)["claude"].Windows, dark), File("tray"));
+            AccountScenes(File, view.Palette, now, consumption);
         }
+        SettingsScenes(directory, now, consumption);
         WriteIcon(Path.Combine(directory, "TokenStats.ico"));
+    }
+
+    // Mehrere Konten (SPEC §6)
+
+    /// <summary>Einstellungen ohne Pfad und Store mit Demo-Konten eines Zustands; <paramref name="hidden"/> blendet ein Konto aus.</summary>
+    static (AppSettings Settings, UsageStore Store) AccountScene(DemoAccounts.Scenario scenario, DateTimeOffset now, string? hidden = null)
+    {
+        var settings = new AppSettings();
+        var store = new UsageStore([], settings, cachePath: null);
+        var accounts = DemoAccounts.Accounts(scenario, now, DemoSnapshots(now))
+            .Select(account => account.Id == hidden ? account with { Hidden = true } : account).ToList();
+        DemoAccounts.Show(store, settings, accounts);
+        return (settings, store);
+    }
+
+    /// <summary>
+    /// Popup mit mehreren Konten: ohne Vorauswahl (das knappste Konto „Kunde A“ ist gewählt), fehlender
+    /// Ordner sichtbar und ausgeblendet, Abruffehler HTTP 503 und „Nicht angemeldet“.
+    /// </summary>
+    static void AccountScenes(Func<string, string> file, Palette palette, DateTimeOffset now, ConsumptionStore consumption)
+    {
+        void Shot(string name, DemoAccounts.Scenario scenario, string? selected, string? hidden = null)
+        {
+            var (settings, store) = AccountScene(scenario, now, hidden);
+            var view = new PopupView(store, consumption, settings, () => { }) { Palette = palette, Now = () => now };
+            view.Reset(selected);
+            Save(Card(view.Build(), palette), file(name));
+        }
+
+        Shot("limits-konten-mehrere", DemoAccounts.Scenario.Multi, selected: null);
+        Shot("limits-konto-ordner-fehlt", DemoAccounts.Scenario.Invalid, DemoAccounts.KundeA);
+        // Ausgeblendet steht „Kunde A“ nicht in der Kontoleiste; gewählt ist darum das Standardkonto.
+        Shot("limits-konto-ordner-fehlt-ausgeblendet", DemoAccounts.Scenario.Invalid, "claude", hidden: DemoAccounts.KundeA);
+        Shot("limits-konto-http-503", DemoAccounts.Scenario.Errors, DemoAccounts.KundeA);
+        Shot("limits-konto-nicht-angemeldet", DemoAccounts.Scenario.Errors, DemoAccounts.Arbeit);
+    }
+
+    /// <summary>Breite der Client-Fläche des Einstellungsfensters (480 px außen, ohne Rahmen).</summary>
+    const double SettingsWidth = 464;
+
+    /// <summary>
+    /// Einstellungen mit mehreren Konten, fehlendem Ordner sichtbar und ausgeblendet. Das Fenster wird
+    /// nie angezeigt: Sein Inhalt wird offscreen in voller Höhe gezeichnet, hell und dunkel über das
+    /// Fluent-Theme der App, das danach zurückgesetzt wird.
+    /// </summary>
+    static void SettingsScenes(string directory, DateTimeOffset now, ConsumptionStore consumption)
+    {
+        var app = Application.Current;
+        var previous = app.ThemeMode;
+        try
+        {
+            foreach (var (suffix, dark) in new[] { ("light", false), ("dark", true) })
+            {
+                app.ThemeMode = dark ? ThemeMode.Dark : ThemeMode.Light;
+                void Shot(string name, DemoAccounts.Scenario scenario, string? hidden = null)
+                {
+                    var (settings, store) = AccountScene(scenario, now, hidden);
+                    var window = new SettingsWindow(settings, store, consumption, dark);
+                    Save(SettingsPage(window.DetachContent(), dark), Path.Combine(directory, $"{name}-{suffix}.png"));
+                }
+
+                Shot("einstellungen-konten-mehrere", DemoAccounts.Scenario.Multi);
+                Shot("einstellungen-konto-ordner-fehlt", DemoAccounts.Scenario.Invalid);
+                Shot("einstellungen-konto-ordner-fehlt-ausgeblendet", DemoAccounts.Scenario.Invalid, hidden: DemoAccounts.KundeA);
+            }
+        }
+        finally
+        {
+            app.ThemeMode = previous;
+        }
+    }
+
+    /// <summary>Inhalt des Einstellungsfensters auf der Fensterfläche, mit Schrift und Farben des Fenster-Stils.</summary>
+    static FrameworkElement SettingsPage(FrameworkElement body, bool dark)
+    {
+        var app = Application.Current;
+        // Mica lässt den Fenstergrund durchsichtig – dann die Grundfarbe des Themes, sonst eine feste.
+        static Brush? Opaque(object? value) => value is SolidColorBrush { Color.A: 255 } brush ? brush : null;
+        var host = new Border
+        {
+            Width = SettingsWidth,
+            Child = body,
+            Background = Opaque(WindowStyleValue(Control.BackgroundProperty))
+                         ?? Opaque(app.TryFindResource("ApplicationBackgroundBrush"))
+                         ?? Palette.Solid(dark ? 0x202020 : 0xF3F3F3),
+        };
+        TextElement.SetForeground(host, WindowStyleValue(Control.ForegroundProperty) as Brush
+                                        ?? app.TryFindResource("TextFillColorPrimaryBrush") as Brush
+                                        ?? (dark ? Brushes.White : Brushes.Black));
+        TextElement.SetFontFamily(host, WindowStyleValue(Control.FontFamilyProperty) as FontFamily
+                                        ?? app.TryFindResource("ContentControlThemeFontFamily") as FontFamily
+                                        ?? SystemFonts.MessageFontFamily);
+        TextElement.SetFontSize(host, WindowStyleValue(Control.FontSizeProperty) as double?
+                                      ?? app.TryFindResource("ControlContentThemeFontSize") as double?
+                                      ?? SystemFonts.MessageFontSize);
+        host.Measure(new Size(SettingsWidth, double.PositiveInfinity));
+        host.Arrange(new Rect(host.DesiredSize));
+        host.UpdateLayout();
+        return host;
+    }
+
+    /// <summary>Wert einer Eigenschaft aus dem impliziten Fenster-Stil des Themes, Ressourcen aufgelöst; <c>null</c>, wenn er sie nicht setzt.</summary>
+    static object? WindowStyleValue(DependencyProperty property)
+    {
+        for (var style = Application.Current.TryFindResource(typeof(Window)) as Style; style is not null; style = style.BasedOn)
+            foreach (var setter in style.Setters.OfType<Setter>())
+                if (setter.Property == property)
+                    return setter.Value is DynamicResourceExtension reference ? Application.Current.TryFindResource(reference.ResourceKey) : setter.Value;
+        return null;
     }
 
     /// <summary>Popup-Rahmen nachgebildet: Karte mit runden Ecken, ohne Schatten.</summary>

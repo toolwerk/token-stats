@@ -18,16 +18,18 @@ public sealed class SettingsWindow : Window
     readonly UsageStore store;
     readonly ConsumptionStore consumption;
     /// <summary>Farben der Hinweise im Abschnitt „Konten“.</summary>
-    readonly Palette palette = new(SystemTheme.AppsDark);
+    readonly Palette palette;
     readonly StackPanel accountList = new();
     /// <summary>Konto, dessen Bezeichnung gerade bearbeitet wird.</summary>
     string? editingId;
 
-    public SettingsWindow(AppSettings settings, UsageStore store, ConsumptionStore consumption)
+    /// <param name="dark">Hell oder dunkel erzwingen (Screenshots); <c>null</c> = wie das System.</param>
+    public SettingsWindow(AppSettings settings, UsageStore store, ConsumptionStore consumption, bool? dark = null)
     {
         this.settings = settings;
         this.store = store;
         this.consumption = consumption;
+        palette = new Palette(dark ?? SystemTheme.AppsDark);
 
         Title = "Token Stats – Einstellungen";
         Width = 480;
@@ -38,6 +40,21 @@ public sealed class SettingsWindow : Window
         MaxHeight = SystemParameters.WorkArea.Height;
         Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = Build() };
     }
+
+#if DEBUG
+    /// <summary>
+    /// Nur für Screenshots: nimmt den Inhalt ohne ScrollViewer aus dem Fenster, damit er offscreen in
+    /// voller Höhe gezeichnet werden kann. Das Fenster wird dabei nie angezeigt.
+    /// </summary>
+    internal FrameworkElement DetachContent()
+    {
+        var scroll = (ScrollViewer)Content;
+        var body = (FrameworkElement)scroll.Content;
+        scroll.Content = null;
+        Content = null;
+        return body;
+    }
+#endif
 
     UIElement Build()
     {

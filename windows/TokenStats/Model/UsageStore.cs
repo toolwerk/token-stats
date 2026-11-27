@@ -193,6 +193,8 @@ public sealed class UsageStore
 
     public void Refresh(bool manual)
     {
+        // Demo-Stand bleibt fest: keine Abfrage, kein Reset-Rollover.
+        if (isDemo) return;
         var now = DateTimeOffset.UtcNow;
         if (manual || now - lastDiscovery >= DiscoveryInterval) ReloadAccounts();
         RollOverResets(now);
@@ -262,13 +264,23 @@ public sealed class UsageStore
         if (changed) Changed?.Invoke();
     }
 
-    /// <summary>Nur für Screenshots: fester Stand, ohne Abruf und ohne den Cache zu überschreiben.</summary>
-    public void ShowDemo(Dictionary<string, ProviderSnapshot> snapshots)
+    /// <summary>
+    /// Nur für Screenshots: fester Stand, ohne Abruf und ohne den Cache zu überschreiben. Ohne
+    /// <paramref name="entries"/> die vier Standardkonten als Demo-Konten (<see cref="DemoAccounts"/>):
+    /// keine Erkennung, keine Kontodateien – so stimmt das Bild auch auf einem Rechner ohne Anmeldung.
+    /// </summary>
+    public void ShowDemo(Dictionary<string, ProviderSnapshot> snapshots, IReadOnlyList<AccountEntry>? entries = null,
+                         IReadOnlyDictionary<string, string>? errors = null)
     {
-        // Nie echte Konten in Screenshots: nur die Standardkonten, ohne Erkennung.
         isDemo = true;
-        Entries = [new AccountEntry(new ClaudeProvider()), new AccountEntry(new CodexProvider()), new AccountEntry(new AntigravityProvider()), new AccountEntry(new OllamaProvider())];
+        timer?.Stop();
+        Entries = entries ?? DemoAccounts.StandardEntries();
         States = snapshots.ToDictionary(pair => pair.Key, pair => new ProviderState { Snapshot = pair.Value });
+        foreach (var (id, error) in errors ?? new Dictionary<string, string>())
+        {
+            if (!States.TryGetValue(id, out var state)) States[id] = state = new ProviderState();
+            state.Error = error;
+        }
         Changed?.Invoke();
     }
 

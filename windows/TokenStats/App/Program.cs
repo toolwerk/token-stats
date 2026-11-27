@@ -29,8 +29,18 @@ public static class Program
         {
             app.Startup += (_, _) =>
             {
-                Screenshots.Run(directory);
-                app.Shutdown();
+                try
+                {
+                    Screenshots.Run(directory);
+                    app.Shutdown();
+                }
+                catch (Exception error)
+                {
+                    // Ohne Konsole (WinExe, CI-Lauf): Fehler neben die Bilder schreiben und mit Code 1 enden.
+                    Directory.CreateDirectory(directory);
+                    File.WriteAllText(Path.Combine(directory, "screenshots-error.txt"), error.ToString());
+                    app.Shutdown(1);
+                }
             };
             return app.Run();
         }
