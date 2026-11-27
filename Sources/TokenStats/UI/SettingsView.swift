@@ -162,9 +162,20 @@ private struct AccountsSection: View {
             }
         } header: {
             Text("Konten")
+                #if DEBUG
+                .onAppear {
+                    // Für Bilder des offenen Feldes: TOKENSTATS_DEMO_EDIT=<Konto-ID>, nur mit Demo-Konten.
+                    if store.isDemo, let id = ProcessInfo.processInfo.environment["TOKENSTATS_DEMO_EDIT"],
+                       let provider = store.provider(id: id) {
+                        draft = ProcessInfo.processInfo.environment["TOKENSTATS_DEMO_EDIT_TEXT"] ?? store.customLabel(provider.id) ?? ""
+                        editing = provider.id
+                    }
+                }
+                #endif
         } footer: {
-            // verbatim: Sonst liest SwiftUI „~/.claude-2 … ~/.codex-2“ als Markdown-Durchstreichung.
-            Text(verbatim: "Weitere Konten legst du mit eigenem Ordner an: »CLAUDE_CONFIG_DIR=~/.claude-2 claude« bzw. »CODEX_HOME=~/.codex-2 codex«. Ordner wie ~/.claude-2 findet Token Stats selbst. Ausgeblendete Konten werden nicht abgefragt.")
+            // Befehle als eigene Mono-Zeilen, nie im Wort getrennt; Text(verbatim:) innen, damit
+            // SwiftUI „~/.claude-2 … ~/.codex-2“ nicht als Markdown-Durchstreichung liest.
+            CommandText("Weitere Konten legst du mit eigenem Ordner an: »CLAUDE_CONFIG_DIR=~/.claude-2 claude« bzw. »CODEX_HOME=~/.codex-2 codex«. Ordner wie ~/.claude-2 findet Token Stats selbst. Ausgeblendete Konten werden nicht abgefragt.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -265,22 +276,23 @@ private struct AccountsSection: View {
                 }
             }
             Spacer(minLength: 8)
-            if editing != provider.id {
-                if !missing {
-                    Button {
-                        draft = store.customLabel(provider.id) ?? ""
-                        editing = provider.id
-                    } label: {
-                        Image(systemName: "pencil")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Bezeichnung ändern")
-                    .accessibilityLabel("Bezeichnung ändern")
-                }
-                if provider.source.origin == .manual, let path = provider.source.folder?.path {
-                    Button("Entfernen") { removeFolder(path, kind: provider.kind) }
-                }
+            // Feste Reihenfolge in jeder Zeile: „Entfernen“, ganz rechts der Stift. Fehlt der
+            // Stift (Ordner fehlt, Feld offen), hält ein unsichtbarer Platzhalter die Stelle.
+            if provider.source.origin == .manual, let path = provider.source.folder?.path {
+                Button("Entfernen") { removeFolder(path, kind: provider.kind) }
             }
+            Button {
+                draft = store.customLabel(provider.id) ?? ""
+                editing = provider.id
+            } label: {
+                Image(systemName: "pencil")
+            }
+            .buttonStyle(.borderless)
+            .help("Bezeichnung ändern")
+            .accessibilityLabel("Bezeichnung ändern")
+            .opacity(missing || editing == provider.id ? 0 : 1)
+            .disabled(missing || editing == provider.id)
+            .accessibilityHidden(missing || editing == provider.id)
         }
     }
 
@@ -334,6 +346,8 @@ private struct AccountsSection: View {
             if provider.source.origin == .manual, let path = provider.source.folder?.path {
                 Button("Entfernen") { removeFolder(path, kind: provider.kind) }
             }
+            // Platzhalter für den Stift, damit „Entfernen“ wie in den Kontozeilen sitzt.
+            Image(systemName: "pencil").opacity(0).accessibilityHidden(true)
         }
     }
 
@@ -365,7 +379,9 @@ private struct AccountsSection: View {
 
     private func notice(_ symbol: String, _ text: String, _ color: Color) -> some View {
         Label {
-            Text(text).fixedSize(horizontal: false, vertical: true)
+            // Volle Breite der Zeile, sonst bestimmt die Befehlszeile die Breite und der Satz
+            // bricht nach jedem zweiten Wort um.
+            CommandText(text).frame(maxWidth: .infinity, alignment: .leading)
         } icon: {
             Image(systemName: symbol)
         }

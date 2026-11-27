@@ -62,6 +62,8 @@ struct Screenshots {
                 // Mehrere Konten: Kontoleiste unter den Anbieter-Tabs (nur Demo-Konten).
                 let selected = store.sortedProviders.first { $0.kind == "claude" && !$0.isDefaultAccount }?.id ?? "claude"
                 try await render(card(popover(selected: selected)), appearance, to: file("limits-konten-\(scenario.rawValue)"))
+                // Ohne Vorauswahl, wie beim Öffnen: das knappste Konto ist gewählt.
+                try await render(card(popover(selected: nil)), appearance, to: file("limits-konten-\(scenario.rawValue)-offen"))
             }
             try await render(menuBar, appearance, to: file("menubar"))
             try await render(widgets, appearance, to: file("widgets"))
@@ -70,7 +72,7 @@ struct Screenshots {
 
     // MARK: Inhalte
 
-    private func popover(selected: String, usage: Bool = false) -> some View {
+    private func popover(selected: String?, usage: Bool = false) -> some View {
         PopoverView(
             store: store, consumption: consumption, settings: settings,
             selectedID: selected, showUsage: usage

@@ -221,4 +221,31 @@ import TokenStatsCore
         #expect(settings.accountLabels == before.0 && settings.hiddenAccounts == before.1, "Demo schreibt nichts in die Einstellungen")
     }
     #endif
+
+    // MARK: Designer-Prüfung PR #5
+
+    @Test func longAutomaticLabelIsNotShortened() {
+        let source = AccountSource(email: DemoAccounts.longEmail)
+        #expect(source.automaticLabel == "kundenbetreuung-niederlassung-sued")
+        #expect(source.automaticLabel?.count == 34, "länger als 24: automatische Bezeichnungen werden nie gekürzt")
+    }
+
+    @Test func knownAccountNamesAreBounded() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let day: TimeInterval = 24 * 3600
+        var stored: [String: KnownAccountNames.Entry] = [
+            "claude@alt": .init(name: "Claude · Alt", lastSeen: now.addingTimeInterval(-200 * day)),
+            "claude@weg": .init(name: "Claude · Kunde A", lastSeen: now.addingTimeInterval(-10 * day)),
+        ]
+        for index in 0..<60 {
+            stored[String(format: "claude@%08x", index)] = .init(name: "Claude · Test \(index)",
+                                                                  lastSeen: now.addingTimeInterval(-Double(index + 20) * day))
+        }
+        let merged = KnownAccountNames.merge(stored: stored, current: ["claude": "Claude · Privat"], now: now)
+        #expect(merged["claude"]?.name == "Claude · Privat", "aktuelle Konten immer")
+        #expect(merged["claude@weg"]?.name == "Claude · Kunde A", "kürzlich verschwunden: Name bleibt")
+        #expect(merged["claude@alt"] == nil, "nach 180 Tagen vergessen")
+        #expect(merged.count == 1 + KnownAccountNames.maxVanished, "höchstens 50 verschwundene")
+        #expect(merged[String(format: "claude@%08x", 59)] == nil, "die am längsten nicht gesehenen fallen zuerst")
+    }
 }

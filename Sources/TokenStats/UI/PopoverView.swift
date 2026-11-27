@@ -311,7 +311,8 @@ private struct AccountChip: View {
                     Text("!").fontWeight(.bold)
                 }
             }
-            .font(.system(size: 11.5, weight: isSelected ? .semibold : .regular))
+            // Gleiche Schrift gewählt und nicht gewählt – sonst springt die Breite der Chips.
+            .font(.system(size: 11.5))
             .foregroundStyle(hasProblem ? .secondary : isSelected ? .primary : .secondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
@@ -439,7 +440,7 @@ private struct ProviderPage: View {
     @ViewBuilder
     private var limits: some View {
         if let problem {
-            Label(problem, systemImage: "exclamationmark.triangle")
+            Label { CommandText(problem) } icon: { Image(systemName: "exclamationmark.triangle") }
                 .font(.system(size: 11))
                 .foregroundStyle(Severity.crit.color)
                 .fixedSize(horizontal: false, vertical: true)
@@ -496,7 +497,7 @@ private struct StatusLine: View {
     }
 
     private func label(_ symbol: String, _ text: String, _ severity: Severity?) -> some View {
-        Label(text, systemImage: symbol)
+        Label { CommandText(text) } icon: { Image(systemName: symbol) }
             .font(.system(size: 11))
             .foregroundStyle(severity.map { AnyShapeStyle($0.color) } ?? AnyShapeStyle(.secondary))
             .fixedSize(horizontal: false, vertical: true)
