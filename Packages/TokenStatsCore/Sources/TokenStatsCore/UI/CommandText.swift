@@ -271,7 +271,9 @@ struct TokenFlow: Layout {
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         var y = bounds.minY
-        for row in arrange(subviews, width: bounds.width) {
+        // Mit derselben Breite umbrechen wie beim Messen: `bounds.width` ist nur die breiteste
+        // Zeile und brächte durch Rundung eine Zeile zu früh um.
+        for row in arrange(subviews, width: max(proposal.width ?? bounds.width, bounds.width)) {
             var x = bounds.minX
             for index in row.indices {
                 let size = subviews[index].sizeThatFits(.unspecified)
@@ -293,7 +295,7 @@ struct TokenFlow: Layout {
         var row = Row()
         for (index, subview) in subviews.enumerated() {
             let size = subview.sizeThatFits(.unspecified)
-            if !row.indices.isEmpty, row.width + spacing + size.width > width {
+            if !row.indices.isEmpty, row.width + spacing + size.width > width + 0.5 {
                 rows.append(row)
                 row = Row()
             }

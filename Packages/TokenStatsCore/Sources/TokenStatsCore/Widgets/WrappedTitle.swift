@@ -1,41 +1,54 @@
+import CoreText
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 
 /// Umbruch von Kontotiteln wie „Claude · Agentur Nord“, gemessen statt gezählt (Designer-
-/// Prüfung PR #5, Runde 6). Rein und testbar; `WrappedTitle` zeichnet danach.
+/// Prüfung PR #5, Runden 6 und 7). Rein und testbar; `WrappedTitle` zeichnet danach.
 ///
 /// Regeln:
 /// - Umbrochen wird nach Leerzeichen und Bindestrichen, nie mitten im Wort.
-/// - Der Trennpunkt beginnt die neue Zeile („Claude“ / „· Agentur Nord“), wenn „· Wort“ dort
-///   ganz passt; sonst bleibt er am Ende der Vorzeile („Claude ·“ / „MÖBELWERKSTATT“).
+/// - Passt der Titel nicht in eine Zeile, aber „· Kontoname“ ganz, wird dort geteilt
+///   („Claude“ / „· Agentur Nord“).
+/// - Sonst beginnt der Trennpunkt die neue Zeile, wenn „· Wort“ dort ganz passt; andernfalls
+///   bleibt er am Ende der Vorzeile („Claude ·“ / „MÖBELWERKSTATT“).
 /// - Ist ein einzelnes Wort allein breiter als die Zeile, bricht es als letzter Ausweg nach
-///   einem beliebigen Zeichen – lieber getrennt als abgeschnitten oder im Innenrand.
+///   einem beliebigen Zeichen (Stufe S8 des Entwurfs), und das letzte Stück hat mindestens
+///   3 Zeichen – kein einzelnes „T“. Die Tabelle des großen Widgets vermeidet das ganz (L5).
+///
+/// Gemessen wird immer der ganze Zeilentext (`width`), mit Kerning – nicht die Summe der
+/// Einzelzeichen, die bei Großbuchstaben 2–3 pt zu breit ist.
 public enum TitleWrap {
-    public static func lines(_ characters: [Character], widths: [CGFloat], available: CGFloat) -> [Range<Int>] {
+    /// Mindestlänge des letzten Stücks beim Zeichenumbruch.
+    public static let minimumTail = 3
+
+    public static func lines(_ characters: [Character], available: CGFloat, width: (Range<Int>) -> CGFloat) -> [Range<Int>] {
         let count = characters.count
         func breakable(_ position: Int) -> Bool {
             position > 0 && position < count && (characters[position - 1] == " " || characters[position - 1] == "-")
         }
-        func width(_ range: Range<Int>) -> CGFloat { range.map { widths[$0] }.reduce(0, +) }
-        /// Breite von `position` bis zur nächsten Bruchstelle danach, ohne Leerzeichen am Ende.
-        func segmentWidth(from position: Int, skippingFirst: Int) -> CGFloat {
-            // Ab dem ersten Zeichen nach dem Übersprungenen bis zur nächsten Bruchstelle.
+        func trimmed(_ range: Range<Int>) -> Range<Int> {
+            var end = range.upperBound
+            while end > range.lowerBound, characters[end - 1] == " " { end -= 1 }
+            return range.lowerBound..<end
+        }
+        func fits(_ range: Range<Int>) -> Bool { width(trimmed(range)) <= available + 0.001 }
+        /// „· Wort“ ab `position` bis zur nächsten Bruchstelle nach dem Wort.
+        func segment(from position: Int, skippingFirst: Int) -> Range<Int> {
             var end = min(position + skippingFirst + 1, count)
             while end < count, !breakable(end) { end += 1 }
-            var last = end
-            while last > position, characters[last - 1] == " " { last -= 1 }
-            return width(position..<last)
+            return trimmed(position..<end)
         }
 
-        // „Anbieter · Konto“: passt der Titel nicht in eine Zeile, aber „· Konto“ ganz, dann
-        // genau dort teilen („Claude“ / „· Agentur Nord“) – der Kontoname bleibt zusammen.
-        if width(0..<count) > available + 0.001, let separator = (0..<max(count - 2, 0)).first(where: {
+        if !fits(0..<count), let separator = (0..<max(count - 2, 0)).first(where: {
             characters[$0] == " " && characters[$0 + 1] == "·" && characters[$0 + 2] == " "
         }) {
             let kind = 0..<separator
             let rest = (separator + 1)..<count
-            if width(kind) <= available + 0.001, width(rest) <= available + 0.001 {
-                return [kind, rest]
-            }
+            if fits(kind), fits(rest) { return [kind, rest] }
         }
 
         var result: [Range<Int>] = []
@@ -43,101 +56,192 @@ public enum TitleWrap {
         while start < count {
             while start < count, characters[start] == " " { start += 1 }
             if start >= count { break }
-            var used: CGFloat = 0
             var end = start
-            while end < count, used + widths[end] <= available + 0.001 {
-                used += widths[end]
-                end += 1
-            }
+            while end < count, fits(start..<(end + 1)) { end += 1 }
             if end >= count {
-                result.append(start..<count)
+                result.append(trimmed(start..<count))
                 break
             }
             if end == start { end = start + 1 }
-            // Leerzeichen am Ende der Zeile zählen nicht: Bricht es genau dort, ist das die Stelle.
             var candidates = (start + 1...end).filter(breakable)
-            if end < count, characters[end] == " " { candidates.append(end + 1) }
+            if characters[end] == " " { candidates.append(end + 1) }
             guard var position = candidates.last else {
+                // Zeichenumbruch: das letzte Stück des Wortes nicht kürzer als `minimumTail`.
+                var wordEnd = end
+                while wordEnd < count, !breakable(wordEnd), characters[wordEnd] != " " { wordEnd += 1 }
+                if wordEnd - end < minimumTail, wordEnd - minimumTail > start {
+                    end = wordEnd - minimumTail
+                }
                 result.append(start..<end)
                 start = end
                 continue
             }
-            // „· “ am Zeilenende: lieber vor dem Punkt brechen, wenn „· Wort“ in eine Zeile passt.
             if position - 2 > start, characters[position - 2] == "·", candidates.contains(position - 2),
-               segmentWidth(from: position - 2, skippingFirst: 2) <= available + 0.001 {
+               fits(segment(from: position - 2, skippingFirst: 2)) {
                 position -= 2
             }
-            var lineEnd = position
-            while lineEnd > start, characters[lineEnd - 1] == " " { lineEnd -= 1 }
-            result.append(start..<lineEnd)
+            result.append(trimmed(start..<position))
             start = position
         }
         return result
     }
+
+    /// Für Tests und einfache Fälle: Breite als Summe fester Zeichenbreiten.
+    public static func lines(_ characters: [Character], widths: [CGFloat], available: CGFloat) -> [Range<Int>] {
+        lines(characters, available: available) { range in range.map { widths[$0] }.reduce(0, +) }
+    }
+
+    /// Alle unterschiedlichen Umbrüche von breit nach schmal – für `ViewThatFits`, das dann die
+    /// erste Fassung nimmt, deren Zeilen wirklich passen.
+    /// Schmaler als das wird kein Titel gesetzt: Die schmalste Spalte (Kontoname in der Tabelle
+    /// der kleinsten großen Kachel) ist rund 100 pt breit.
+    public static let narrowest: CGFloat = 60
+
+    public static func variants(_ characters: [Character], width: (Range<Int>) -> CGFloat) -> [[Range<Int>]] {
+        var result: [[Range<Int>]] = []
+        var available = width(0..<characters.count)
+        for _ in 0..<24 {
+            let lines = lines(characters, available: available, width: width)
+            if result.last != lines { result.append(lines) }
+            let widest = lines.map(width).max() ?? 0
+            if widest <= narrowest || lines.allSatisfy({ $0.count <= 1 }) { break }
+            available = widest - 0.5
+        }
+        return result
+    }
+
+    /// Breitestes Stück, das nie umbrechen darf (zwischen Leerzeichen und Bindestrichen) –
+    /// zeigt, ob eine Spalte ohne Bruch im Wort auskommt.
+    public static func widestUnbreakable(_ characters: [Character], width: (Range<Int>) -> CGFloat) -> CGFloat {
+        var widest: CGFloat = 0
+        var start = 0
+        for index in characters.indices {
+            let character = characters[index]
+            if character == " " {
+                if index > start { widest = max(widest, width(start..<index)) }
+                start = index + 1
+            } else if character == "-" {
+                widest = max(widest, width(start..<(index + 1)))
+                start = index + 1
+            }
+        }
+        if characters.count > start { widest = max(widest, width(start..<characters.count)) }
+        return widest
+    }
 }
 
-/// Titel aus einzelnen Zeichen, umbrochen nach `TitleWrap`; meldet nie mehr Breite als
-/// angeboten. `boldCount` Zeichen am Anfang (der Anbieter) sind fett, der Rest in `accountWeight`.
+/// Breite eines Textes in der Systemschrift, mit Kerning – wie SwiftUI ihn setzt.
+public enum TextWidth {
+    public static func measure(_ runs: [(text: String, weight: Font.Weight)], size: CGFloat) -> CGFloat {
+        let string = NSMutableAttributedString()
+        for run in runs where !run.text.isEmpty {
+            string.append(NSAttributedString(string: run.text, attributes: [.font: font(size: size, weight: run.weight)]))
+        }
+        let line = CTLineCreateWithAttributedString(string)
+        return CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+    }
+
+    #if canImport(AppKit)
+    private static func font(size: CGFloat, weight: Font.Weight) -> NSFont {
+        let mapped: NSFont.Weight = switch weight {
+        case .bold: .bold
+        case .semibold: .semibold
+        case .medium: .medium
+        default: .regular
+        }
+        return NSFont.systemFont(ofSize: size, weight: mapped)
+    }
+    #else
+    private static func font(size: CGFloat, weight: Font.Weight) -> UIFont {
+        let mapped: UIFont.Weight = switch weight {
+        case .bold: .bold
+        case .semibold: .semibold
+        case .medium: .medium
+        default: .regular
+        }
+        return UIFont.systemFont(ofSize: size, weight: mapped)
+    }
+    #endif
+}
+
+/// Titel, umbrochen nach `TitleWrap`. Jede Zeile ist ein eigener `Text` (mit Kerning);
+/// `ViewThatFits` nimmt die erste Fassung, deren Zeilen in die angebotene Breite passen.
+/// Der Anfang bis `prefix` (Anbieter und Punkt) steht in `prefixWeight`, der Rest in `accountWeight`.
 public struct WrappedTitle: View {
-    let text: String
+    let characters: [Character]
     let size: CGFloat
     let boldCount: Int
     let prefixWeight: Font.Weight
     let accountWeight: Font.Weight
+    let variants: [[Range<Int>]]
 
-    /// „Claude · Kunde A“: `prefix` (Anbieter und Punkt) in `prefixWeight`, der Rest in
-    /// `accountWeight`; ohne `prefix` alles in `prefixWeight`.
     public init(_ text: String, size: CGFloat, prefix: String? = nil,
                 prefixWeight: Font.Weight = .bold, accountWeight: Font.Weight = .bold) {
-        self.text = text
+        let characters = Array(text)
+        let boldCount = prefix.map { text.hasPrefix($0) ? $0.count : text.count } ?? text.count
+        self.characters = characters
         self.size = size
-        self.boldCount = prefix.map { text.hasPrefix($0) ? $0.count : text.count } ?? text.count
+        self.boldCount = boldCount
         self.prefixWeight = prefixWeight
         self.accountWeight = accountWeight
+        variants = Self.cachedVariants(characters, size: size, boldCount: boldCount, prefixWeight, accountWeight)
+    }
+
+    /// Die Varianten hängen nur von Text, Größe und Gewichten ab – einmal rechnen, dann
+    /// wiederverwenden (das große Widget legt jede Tabellenzeile in mehreren Stufen an).
+    private static var cache: [String: [[Range<Int>]]] = [:]
+
+    private static func cachedVariants(_ characters: [Character], size: CGFloat, boldCount: Int,
+                                       _ prefixWeight: Font.Weight, _ accountWeight: Font.Weight) -> [[Range<Int>]] {
+        let key = "\(String(characters))|\(size)|\(boldCount)|\(prefixWeight)|\(accountWeight)"
+        if let hit = cache[key] { return hit }
+        var measured: [Range<Int>: CGFloat] = [:]
+        let variants = TitleWrap.variants(characters) { range in
+            if let width = measured[range] { return width }
+            let width = TextWidth.measure(runs(characters, range, boldCount: boldCount, prefixWeight, accountWeight), size: size)
+            measured[range] = width
+            return width
+        }
+        if cache.count > 500 { cache.removeAll() }
+        cache[key] = variants
+        return variants
+    }
+
+    /// Breite des breitesten unteilbaren Stücks dieses Titels.
+    public nonisolated static func widestUnbreakable(_ text: String, size: CGFloat, prefix: String? = nil,
+                                         prefixWeight: Font.Weight = .bold, accountWeight: Font.Weight = .bold) -> CGFloat {
+        let characters = Array(text)
+        let boldCount = prefix.map { text.hasPrefix($0) ? $0.count : text.count } ?? text.count
+        return TitleWrap.widestUnbreakable(characters) { range in
+            TextWidth.measure(runs(characters, range, boldCount: boldCount, prefixWeight, accountWeight), size: size)
+        }
+    }
+
+    /// Text einer Zeile in zwei Läufen: Anbieterteil und Kontoteil.
+    nonisolated static func runs(_ characters: [Character], _ range: Range<Int>, boldCount: Int,
+                     _ prefixWeight: Font.Weight, _ accountWeight: Font.Weight) -> [(text: String, weight: Font.Weight)] {
+        let split = min(max(boldCount, range.lowerBound), range.upperBound)
+        return [(String(characters[range.lowerBound..<split]), prefixWeight),
+                (String(characters[split..<range.upperBound]), accountWeight)]
     }
 
     public var body: some View {
-        TitleWrapLayout(characters: Array(text)) {
-            ForEach(Array(text.enumerated()), id: \.offset) { index, character in
-                Text(verbatim: String(character))
-                    .font(.system(size: size, weight: index < boldCount ? prefixWeight : accountWeight))
-                    .fixedSize()
+        ViewThatFits(in: .horizontal) {
+            ForEach(variants.indices, id: \.self) { index in
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(variants[index].indices, id: \.self) { line in
+                        lineText(variants[index][line]).lineLimit(1).fixedSize()
+                    }
+                }
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: text))
-    }
-}
-
-struct TitleWrapLayout: Layout {
-    let characters: [Character]
-
-    private func layout(_ subviews: Subviews, width: CGFloat) -> (lines: [Range<Int>], widths: [CGFloat], height: CGFloat) {
-        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
-        let widths = sizes.map(\.width)
-        return (TitleWrap.lines(characters, widths: widths, available: width), widths, sizes.map(\.height).max() ?? 0)
+        .accessibilityLabel(Text(verbatim: String(characters)))
     }
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let available = proposal.width ?? .infinity
-        let result = layout(subviews, width: available)
-        let widest = result.lines.map { $0.map { result.widths[$0] }.reduce(0, +) }.max() ?? 0
-        return CGSize(width: min(widest, available), height: CGFloat(result.lines.count) * result.height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let result = layout(subviews, width: bounds.width)
-        var placed = Set<Int>()
-        for (row, line) in result.lines.enumerated() {
-            var x = bounds.minX
-            for index in line {
-                subviews[index].place(at: CGPoint(x: x, y: bounds.minY + CGFloat(row) * result.height), proposal: .unspecified)
-                x += result.widths[index]
-                placed.insert(index)
-            }
-        }
-        for index in subviews.indices where !placed.contains(index) {
-            subviews[index].place(at: CGPoint(x: bounds.minX, y: bounds.minY), proposal: .zero)
-        }
+    private func lineText(_ range: Range<Int>) -> Text {
+        let parts = Self.runs(characters, range, boldCount: boldCount, prefixWeight, accountWeight)
+        return Text(verbatim: parts[0].text).font(.system(size: size, weight: parts[0].weight))
+            + Text(verbatim: parts[1].text).font(.system(size: size, weight: parts[1].weight))
     }
 }

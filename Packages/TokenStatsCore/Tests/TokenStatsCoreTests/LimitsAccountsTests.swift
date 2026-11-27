@@ -216,6 +216,43 @@ import Testing
             == ["Claude", "· kundenbetreuung-", "niederlassung-sued"])
     }
 
+    @Test func characterBreakKeepsAtLeastThreeCharacters() {
+        // Runde 7: kein einzelnes „T“ oder „TT“ als letztes Stück.
+        let lines = titleLines("MÖBELWERKSTATT", 13)
+        #expect(lines == ["MÖBELWERKS", "TATT"] || lines.last.map { $0.count >= TitleWrap.minimumTail } == true)
+        #expect(titleLines("MÖBELWERKSTATT", 12) == ["MÖBELWERKST", "ATT"], "nicht „MÖBELWERKSTAT“ / „T“")
+        #expect(titleLines("MÖBELWERKSTATT", 13).last?.count ?? 0 >= 3)
+    }
+
+    @Test func wholeLineIsMeasuredWithKerning() {
+        // Runde 7: Summe der Einzelzeichen ist bei Großbuchstaben zu breit.
+        let word = "MÖBELWERKSTATT"
+        let whole = TextWidth.measure([(word, .bold)], size: 12)
+        let sum = word.map { TextWidth.measure([(String($0), .bold)], size: 12) }.reduce(0, +)
+        #expect(whole <= sum)
+        #expect(whole > 0)
+    }
+
+    @Test func tableTakesStageL5InsteadOfBreakingAWord() {
+        // Runde 7, §11: Die Tabelle bricht nie im Wort. „Verwaltungsgesellschaft“ passt in der
+        // kleinsten Kachel (308 pt Inhalt) nicht in die normale Kontospalte, aber in die von L5.
+        let accounts = DemoAccounts.accounts(.multi, now: now) + [DemoAccounts.longWordAccount(now: now)]
+        let rows = LimitsAccounts.rows(DemoAccounts.widgetSnapshot(accounts, now: now))
+        #expect(LimitsAccountTable.needsStacked(rows, total: 308))
+        let word = WrappedTitle.widestUnbreakable("Claude · Verwaltungsgesellschaft", size: 11, prefix: "Claude · ",
+                                                  prefixWeight: .semibold, accountWeight: .regular)
+        #expect(word <= LimitsAccountTable.nameWidth(total: 308, stacked: true))
+        let normal = LimitsAccounts.rows(DemoAccounts.widgetSnapshot(DemoAccounts.accounts(.many, now: now), now: now))
+        #expect(!LimitsAccountTable.needsStacked(normal, total: 308), "normale Namen bleiben in der normalen Tabelle")
+    }
+
+    @Test func detailLinesStartWithTheSeparator() {
+        #expect(WidgetHeader.detailVariant([nil, "Max 20× · +1 Limit"], 1) == ["Max 20×", "· +1 Limit"])
+        #expect(WidgetHeader.detailVariant(["knappstes Konto", "Claude · Pro · +2 Limits"], 2)
+            == ["knappstes Konto", "Claude", "· Pro", "· +2 Limits"])
+        #expect(WidgetHeader.detailTokens("Max 20× · +1 Limit") == ["Max 20× ", "· +1 Limit"])
+    }
+
     @Test func titleNeverWiderThanAvailable() {
         let caps = Set("MÖBELWERKSTAT")
         for available in stride(from: CGFloat(6), through: 40, by: 1) {

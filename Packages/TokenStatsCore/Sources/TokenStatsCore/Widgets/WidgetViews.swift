@@ -112,12 +112,17 @@ struct WidgetHeader: View {
                     let details = (accountFirst ? [selection, [kind!, detail].compactMap { $0 }.joined(separator: " · ")] : [selection, detail])
                         .compactMap { $0?.nilIfEmpty }
                     ForEach(details.indices, id: \.self) { index in
-                        HStack(alignment: .top, spacing: 6) {
+                        // spacing 0: Der Abstand zum Punkt kommt nur vom Spacer (Entwurf §3: sonst
+                        // werden aus 6 pt 12 pt und „Claude · Max 5×“ bricht um).
+                        HStack(alignment: .top, spacing: 0) {
                             TokenFlow(spacing: 0) {
                                 ForEach(Array(Self.detailTokens(details[index]).enumerated()), id: \.offset) { _, token in
                                     Text(token).font(Self.detailFont).foregroundStyle(.secondary).lineLimit(1).fixedSize()
                                 }
                             }
+                            // Erst die Details, dann der Abstand zum Punkt – sonst teilt der HStack
+                            // die Breite auf, und „Claude · Max 5×“ bricht unnötig um.
+                            .layoutPriority(1)
                             if index == 0, severity != nil {
                                 Spacer(minLength: 6)
                                 circle.padding(.top, 3)
@@ -134,7 +139,7 @@ struct WidgetHeader: View {
 
     /// Stellen, an denen eine Detailzeile umbrechen darf: nach „ · “, sonst nach Leerzeichen,
     /// wobei „+2 Limits“ und „Max 20×“ zusammenbleiben.
-    static func detailTokens(_ text: String) -> [String] {
+    nonisolated static func detailTokens(_ text: String) -> [String] {
         // Der Trennpunkt beginnt den nächsten Teil („Max 20×“ / „· +2 Limits“), wie im Titel.
         let parts = text.components(separatedBy: " · ")
         return parts.enumerated().map { index, part in
@@ -143,9 +148,11 @@ struct WidgetHeader: View {
     }
 
     private func row(alignment: VerticalAlignment = .top, dot: Bool, @ViewBuilder _ content: () -> some View) -> some View {
-        HStack(alignment: alignment, spacing: 6) {
+        // Abstände ausdrücklich, ohne Stack-Spacing obendrauf (Entwurf §3): Icon → Titel 6,
+        // Inhalt → Punkt mindestens 6.
+        HStack(alignment: alignment, spacing: 0) {
             RobotIcon(size: 13)
-            content()
+            content().padding(.leading, 6)
             if dot {
                 Spacer(minLength: 6)
                 circle.padding(.top, alignment == .top ? 4 : 0)
@@ -165,7 +172,7 @@ struct WidgetHeader: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(titleLines.indices, id: \.self) { index in
                 if index == 0, dotOnTitle, severity != nil {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 0) {
                         titleLines[index]
                         Spacer(minLength: 6)
                         circle
@@ -183,7 +190,7 @@ struct WidgetHeader: View {
     private func stackDetails(_ details: [String?], dot: Bool) -> some View {
         let lines = details.compactMap { $0?.nilIfEmpty }
         ForEach(lines.indices, id: \.self) { index in
-            HStack(spacing: 6) {
+            HStack(spacing: 0) {
                 // Einzeilige Detailzeile in fester Höhe 12 pt (Entwurf §4.1); die Glyphen passen.
                 line(lines[index], Self.detailFont).foregroundStyle(.secondary).frame(height: 12)
                 if dot, index == 0, severity != nil {
@@ -226,22 +233,25 @@ struct WidgetHeader: View {
 
     /// Detailzeilen in drei Stufen: wie gegeben; der letzte Teil der letzten Zeile („+2 Limits“)
     /// in eigener Zeile; jeder Teil in eigener Zeile. Nie ein Bruch mitten in einem Teil.
-    static func detailVariant(_ details: [String?], _ variant: Int) -> [String?] {
+    nonisolated static func detailVariant(_ details: [String?], _ variant: Int) -> [String?] {
         let lines = details.compactMap { $0?.nilIfEmpty }
         switch variant {
         case 0:
             return lines
         case 1:
             guard let last = lines.last, let range = last.range(of: " · ", options: .backwards) else { return lines }
-            return lines.dropLast() + [String(last[..<range.lowerBound]), String(last[range.upperBound...])]
+            // Der Trennpunkt beginnt die neue Zeile, wie überall („Max 20×“ / „· +1 Limit“).
+            return lines.dropLast() + [String(last[..<range.lowerBound]), "· " + String(last[range.upperBound...])]
         default:
-            return lines.flatMap { $0.components(separatedBy: " · ") }
+            return lines.flatMap { line in
+                line.components(separatedBy: " · ").enumerated().map { $0.offset == 0 ? $0.element : "· " + $0.element }
+            }
         }
     }
 
     /// Stellen, an denen ein Name umbrechen darf: nach einem Leerzeichen oder Bindestrich.
     /// „Kunde Schmidt Beratung“ → „Kunde “, „Schmidt “, „Beratung“.
-    static func breakTokens(_ text: String) -> [String] {
+    nonisolated static func breakTokens(_ text: String) -> [String] {
         var tokens: [String] = []
         var current = ""
         for character in text {
@@ -266,7 +276,7 @@ struct WidgetHeader: View {
     }
 
     /// Alle Teilungen in zwei Zeilen an erlaubten Stellen, die längere erste Zeile zuerst.
-    static func twoLineSplits(_ text: String) -> [[String]] {
+    nonisolated static func twoLineSplits(_ text: String) -> [[String]] {
         let tokens = breakTokens(text)
         guard tokens.count > 1 else { return [] }
         return (1..<tokens.count).reversed().map { split in
@@ -493,7 +503,7 @@ public struct LimitsWidgetView: View {
 
     /// Welches Konto gezeigt wird – gewählt oder das knappste, sonst das erste mit Stand.
     /// Ein gewähltes Konto, das nicht im Stand steht, ergibt `nil` (kein stiller Wechsel).
-    public static func resolve(_ snapshot: WidgetSnapshot, provider: String?) -> WidgetSnapshot.Provider? {
+    public nonisolated static func resolve(_ snapshot: WidgetSnapshot, provider: String?) -> WidgetSnapshot.Provider? {
         if let provider { return snapshot.provider(provider) }
         return snapshot.tightest?.provider ?? snapshot.providers.first { $0.snapshot != nil } ?? snapshot.providers.first
     }
@@ -511,7 +521,10 @@ public struct LimitsWidgetView: View {
                 if snapshot.providers.allSatisfy({ $0.snapshot == nil }) {
                     headedNote(WidgetHeader(title: "Limits", detail: nil, severity: nil), noDataText(snapshot.providers.first))
                 } else {
-                    large(snapshot)
+                    // Breite messen: Die Tabelle wählt danach Stufe L5, statt im Wort zu brechen.
+                    GeometryReader { geometry in
+                        large(snapshot, width: geometry.size.width)
+                    }
                 }
                 Spacer(minLength: 0)
                 MachineFooter(snapshot: snapshot)
@@ -574,8 +587,9 @@ public struct LimitsWidgetView: View {
     /// Großes Widget, alle sichtbaren Konten: erst Abschnitte mit allen Limits, passt das
     /// nicht, die Tabelle mit allen Konten, dann mit Sammelzeile – nichts fällt still weg.
     @ViewBuilder
-    private func large(_ snapshot: WidgetSnapshot) -> some View {
+    private func large(_ snapshot: WidgetSnapshot, width: CGFloat) -> some View {
         let rows = LimitsAccounts.rows(snapshot)
+        let stacked = LimitsAccountTable.needsStacked(rows, total: width)
         let header = WidgetHeader(title: "Limits", detail: LimitsAccounts.countText(snapshot),
                                   severity: snapshot.tightest?.window.severity)
         // Mindestens vier Zeilen, sonst lieber die Abschnitte (Entwurf L4: k = n−1 … 4).
@@ -595,17 +609,17 @@ public struct LimitsWidgetView: View {
             }
             VStack(alignment: .leading, spacing: 8) {
                 header
-                LimitsAccountTable(rows: rows, shown: rows.count, now: now)
+                LimitsAccountTable(rows: rows, shown: rows.count, now: now, stacked: stacked)
             }
             ForEach(partial, id: \.self) { shown in
                 VStack(alignment: .leading, spacing: 8) {
                     header
-                    LimitsAccountTable(rows: rows, shown: shown, now: now)
+                    LimitsAccountTable(rows: rows, shown: shown, now: now, stacked: stacked)
                 }
             }
             VStack(alignment: .leading, spacing: 8) {
                 header
-                LimitsAccountTable(rows: rows, shown: min(rows.count, 4), now: now)
+                LimitsAccountTable(rows: rows, shown: min(rows.count, 4), now: now, stacked: stacked)
             }
         }
     }

@@ -164,6 +164,12 @@ public enum DemoAccounts {
         claude(id: "claude@0b5e1a7e", "MÖBELWERKSTATT", "~/.claude-moebel", .detected, session: 0.22, week: 0.58, now: now, plan: "Pro")
     }
 
+    /// Langes Einwort (23 Zeichen, unter der 24-Zeichen-Grenze) – zwingt die Tabelle des großen
+    /// Widgets in Stufe L5 statt eines Bruchs im Wort (Designer-Prüfung PR #5, Runde 7).
+    public static func longWordAccount(now: Date) -> Account {
+        claude(id: "claude@7e1a2b3c", "Verwaltungsgesellschaft", "~/.claude-verwaltung", .detected, session: 0.31, week: 0.66, now: now, plan: "Max 5×")
+    }
+
     /// Adresse, deren lokaler Teil die automatische Bezeichnung mit 34 Zeichen ergibt.
     public static let longEmail = "kundenbetreuung-niederlassung-sued@example.com"
 
