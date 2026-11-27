@@ -61,6 +61,23 @@ keine Abfrage, öffnet das Fenster; nur Debug), Fenster-ID per `CGWindowListCopy
 `screencapture -x -o -l <id>`, je einmal im hellen und dunklen Modus. Braucht die
 Freigabe „Bildschirmaufnahme“ für das Terminal.
 
+Mehrere Konten (SPEC §6): `TOKENSTATS_DEMO_ACCOUNTS=1` (nur Debug) ersetzt die echte
+Kontoerkennung durch erfundene Konten aus `DemoAccounts` (TokenStatsCore) – für
+`TOKENSTATS_OPEN_SETTINGS=1` und `make screenshots` Pflicht, sobald Konten zu sehen sind,
+damit nie echte Kontonamen, Adressen oder Ordner im Bild landen. Statt `1` gehen die
+Zustände des Designer-Entwurfs: `one`, `multi`, `many`, `empty`, `invalid`; `make
+screenshots` rendert damit zusätzlich `limits-konten-<zustand>` (gewähltes Konto) und
+`limits-konten-<zustand>-offen` (ohne Vorauswahl). `TOKENSTATS_DEMO_EDIT=<Konto-ID>` (plus
+optional `TOKENSTATS_DEMO_EDIT_TEXT`) öffnet in den Einstellungen gleich den Stift-Editor,
+für Bilder. Hell erzwingen bei dunklem System: Startargument
+`-NSRequiresAquaSystemAppearance YES`. Bezeichnungen und Ausblenden wirken im Demo-Modus
+nur im Speicher.
+
+Ohne Xcode (nur Command Line Tools) laufen die Core-Tests mit Swift Testing so:
+`cd Packages/TokenStatsCore && FW=/Library/Developer/CommandLineTools/Library/Developer/Frameworks
+swift test -Xswiftc -F$FW -Xlinker -F$FW -Xlinker -rpath -Xlinker $FW -Xlinker -rpath -Xlinker
+/Library/Developer/CommandLineTools/Library/Developer/usr/lib`. Mit Xcode reicht `swift test`.
+
 Release: `MARKETING_VERSION` in `project.yml` hochsetzen, Abschnitt `## X.Y.Z` in
 `CHANGELOG.md` schreiben, committen, `make release` (Universal-DMG in `build/`, mit
 „Developer ID Application: Sven Wagener (2GA7DQ3P3Z)“ signiert, notarisiert und gestapelt),

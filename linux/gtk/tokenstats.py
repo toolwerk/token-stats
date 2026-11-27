@@ -4,36 +4,48 @@
 Limits come from api.anthropic.com/api/oauth/usage, token counts from ~/.claude/projects/**/*.jsonl,
 prices from Sources/TokenStats/Resources/pricing.json of this repo (list prices = API comparison value).
 Several accounts (SPEC §6 „Mehrere Konten je Anbieter“): every CLAUDE_CONFIG_DIR is an account of its own, see
-discover_accounts(); limits per account, usage over the logs of all accounts.
+discover_accounts(); limits per account, usage over the logs of all accounts. A folder from CLAUDE_CONFIG_DIR or
+TOKENSTATS_CLAUDE_DIRS that does not exist stays in the account bar (grey with "!") and is never queried.
+The data part imports without GTK, so linux/tests can check it on any machine.
 """
 import hashlib, json, os, sys, glob, re, subprocess, threading, time, urllib.request, urllib.error
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 # gtk-layer-shell must be loaded before libwayland-client, so re-exec once with LD_PRELOAD
-import glob as _glob
-_LAYER_LIB = next(iter(_glob.glob("/usr/lib*/**/libgtk-layer-shell.so.0", recursive=True)), None)
-if _LAYER_LIB and _LAYER_LIB not in os.environ.get("LD_PRELOAD", ""):
-    os.environ["LD_PRELOAD"] = (_LAYER_LIB + " " + os.environ.get("LD_PRELOAD", "")).strip()
-    os.execv(sys.executable, [sys.executable] + sys.argv)
-
-import cairo  # noqa: F401  (needed for the draw callbacks)
-import gi
-gi.require_foreign("cairo")
-gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gdk, GLib, Gio
+if __name__ == "__main__":
+    _LAYER_LIB = next(iter(glob.glob("/usr/lib*/**/libgtk-layer-shell.so.0", recursive=True)), None)
+    if _LAYER_LIB and _LAYER_LIB not in os.environ.get("LD_PRELOAD", ""):
+        os.environ["LD_PRELOAD"] = (_LAYER_LIB + " " + os.environ.get("LD_PRELOAD", "")).strip()
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
 try:
-    gi.require_version("GtkLayerShell", "0.1")
-    from gi.repository import GtkLayerShell as LayerShell
-except (ValueError, ImportError):
-    LayerShell = None
+    import cairo  # noqa: F401  (needed for the draw callbacks)
+    import gi
+    gi.require_foreign("cairo")
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk, Gdk, GLib, Gio, Pango
+except ImportError:
+    if __name__ == "__main__":
+        raise
+    # Nur für linux/tests: ohne GTK importierbar, damit sich die Kontologik prüfen lässt. Die Oberfläche läuft so nicht.
+    cairo = gi = Gdk = GLib = Gio = Pango = None
+    Gtk = type("Gtk", (), {"DrawingArea": object, "Window": object, "Label": object})
+
+LayerShell = None
+if gi:
+    try:
+        gi.require_version("GtkLayerShell", "0.1")
+        from gi.repository import GtkLayerShell as LayerShell
+    except (ValueError, ImportError):
+        LayerShell = None
 
 HOME = os.path.expanduser("~")
 HERE = os.path.dirname(os.path.abspath(__file__))
 CLAUDE_DIRS_ENV = "TOKENSTATS_CLAUDE_DIRS"
 ICON_DIR = f"{HOME}/.cache/tokenstats"
 INTERVAL_S = 300
+WIDTH, HEIGHT = 400, 640   # Fenster fest 400 px breit, siehe Popup
 # Der Usage-Endpunkt ist hart rate-limitiert: höchstens eine Abfrage alle 300 s, auch bei Klick auf
 # „Aktualisieren“ oder nach einem Neustart. Der Stand liegt im Cache,
 # den sich diese Fassung mit dem Plasma-Widget teilt.
@@ -42,8 +54,132 @@ LIMITS_CACHE = f"{ICON_DIR}/limits.json"
 _LIMITS_LOCK = threading.Lock()
 
 GREEN, YELLOW, RED = (0.30, 0.75, 0.50), (0.89, 0.66, 0.24), (0.85, 0.30, 0.30)
-BLUE, BLUE_DIM = (0.0, 0.57, 1.0), (0.06, 0.37, 0.64)
+# Textfarben je Zustand (Sätze, Prozente, Pace-Text) mit mindestens 4,5:1 auf dem festen dunklen Grund #1e1e1e
+# und den Flächen darauf (#2c2c2c, #242424). RED (#d94c4c) hat dort nur 4,0:1, darum #f59a8a (7,8:1) wie auf
+# macOS und Windows im Dunkeln; GREEN (7,2:1) und YELLOW (7,9:1) reichen. Balken und Punkte bleiben bei color_for.
+RED_TEXT = "#f59a8a"
+# Grau der Fehler-Chips: #9a9a9a hat auf dem gewählten Chip (#263c52) nur 4,0:1, #a8a8a8 4,8:1
+PROBLEM_GREY = "#a8a8a8"
+BLUE, BLUE_DIM, GREY = (0.0, 0.57, 1.0), (0.06, 0.37, 0.64), (0.55, 0.55, 0.55)
 WINDOWS = {"session": 5 * 3600, "weekly_all": 7 * 86400, "weekly_scoped": 7 * 86400}
+
+# Zustand eines Kontoeintrags und Texte (Textkatalog „Mehrere Konten“, Abschnitte „Modell“ und „Linux“)
+OK, MISSING_FOLDER = "ok", "missingFolder"
+# Wörtlich wie im macOS-Popover (UsageStore.problem(for:)), der Pfad steht im Satz
+MISSING_FOLDER_TEXT = ("Ordner nicht gefunden: {path}. "
+                       "Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.")
+# Ältere Cache-Einträge (vor dem Satz „Server antwortet mit HTTP nnn.“) enthalten nur „HTTP nnn“
+OLD_HTTP_ERROR_RE = re.compile(r"^HTTP (\d{3})$")
+MISSING_FOLDER_HINT = "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfernen, wenn es ihn nicht mehr gibt."
+EMPTY_TITLE = "Kein Claude-Konto gefunden"
+
+# Befehle in Hinweisen stehen in »…« (ältere Cache-Einträge: `…`). Die Anzeige setzt jeden Befehl in Monospace
+# auf eigene Zeilen, umgebrochen mit wrap_command (QML: wrapCommand in util.js, dieselbe Regel).
+COMMAND_RE = re.compile(r"»([^«]*)«|`([^`]*)`")
+# leerer Zustand, direkt als Teile (Textkatalog „Mehrere Konten“, Abschnitt „Linux“)
+EMPTY_PARTS = [{"kind": "text", "text": "Melde dich mit"}, {"kind": "cmd", "text": "claude"},
+               {"kind": "text", "text": "an. Weitere Ordner:"},
+               {"kind": "cmd", "text": "TOKENSTATS_CLAUDE_DIRS=/pfad/eins:/pfad/zwei"}]
+
+
+def text_parts(text):
+    """Satz -> [{kind: "text"|"cmd", text}]; Befehle ohne »…«, leere Teile fallen weg."""
+    parts, pos = [], 0
+    text = text or ""
+
+    def add(kind, chunk):
+        chunk = chunk.strip()
+        if chunk:
+            parts.append({"kind": kind, "text": chunk})
+
+    for m in COMMAND_RE.finditer(text):
+        add("text", text[pos:m.start()])
+        add("cmd", m.group(1) if m.group(1) is not None else m.group(2))
+        pos = m.end()
+    add("text", text[pos:])
+    return parts
+
+
+# Zeichen, nach denen ein Befehl umbrechen darf, wenn kein Leerzeichen passt, in dieser Rangfolge (das Zeichen
+# bleibt am Zeilenende). So wandert ein Pfadstück ganz in die nächste Zeile, wenn es dort passt.
+COMMAND_BREAK_RANKS = ("=", "/", "-_.:")
+
+
+def _command_break(text, limit):
+    """Länge der Zeile bei einem Bruch nach einem Zeichen aus COMMAND_BREAK_RANKS (der höchste Rang gewinnt,
+    darin der letzte passende), sonst limit (harter Bruch). Ein „.“, mit dem ein Ordnername beginnt (am
+    Tokenanfang oder direkt nach „/“, „=“, „~“), ist kein Bruchpunkt."""
+    for chars in COMMAND_BREAK_RANKS:
+        for i in range(min(limit, len(text)) - 1, -1, -1):
+            c = text[i]
+            if c in chars and not (c == "." and (i == 0 or text[i - 1] in "/=~ ")):
+                return i + 1
+    return limit
+
+
+# Kurze Befehle ohne Leerzeichen (»claude«) stehen im Satz statt allein auf einer Zeile („Melde dich mit claude an.“)
+INLINE_COMMAND_MAX = 16
+
+
+def inline_parts(parts, max_chars=INLINE_COMMAND_MAX):
+    """Teile -> Teile für die Anzeige: Text-Teile und kurze Befehle (ohne Leerzeichen, höchstens max_chars Zeichen)
+    werden zu einem Text-Teil mit „segments“ [{text, mono}] zusammengefasst (mit Leerzeichen verbunden; „text“
+    ist der ganze Satz ohne Auszeichnung). Längere Befehle bleiben eigene Teile (kind „cmd“, wrap_command)."""
+    out = []
+    for part in parts:
+        short = (part["kind"] == "cmd" and len(part["text"]) <= max_chars
+                 and not any(c.isspace() for c in part["text"]))
+        if part["kind"] != "text" and not short:
+            out.append(dict(part))
+            continue
+        segment = {"text": part["text"], "mono": part["kind"] == "cmd"}
+        if out and out[-1]["kind"] == "text":
+            out[-1]["segments"].append(segment)
+            out[-1]["text"] += " " + part["text"]
+        else:
+            out.append({"kind": "text", "text": part["text"], "segments": [segment]})
+    return out
+
+
+def segments_markup(segments):
+    """Segmente als Pango-Markup, Befehle in Monospace."""
+    def escape(text):
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return " ".join(f'<span font_family="monospace">{escape(seg["text"])}</span>' if seg["mono"] else escape(seg["text"])
+                    for seg in segments)
+
+
+def command_label_widths(char_width, command, min_chars):
+    """(Mindest-, natürliche) Breite eines CommandLabel in Pixeln: mindestens min_chars Zeichen, ein kürzerer
+    Befehl nur so breit wie er selbst – die natürliche Breite ist nie kleiner als die Mindestbreite."""
+    length = len(" ".join(str(command).split()))
+    return int(char_width * min(min_chars, length)) + 1, int(char_width * length) + 1
+
+
+def wrap_command(command, max_chars, indent=2):
+    """Monospace-Befehl -> Zeilen mit höchstens max_chars Zeichen, Folgezeilen um indent Leerzeichen eingerückt
+    (die Einrückung zählt mit). Bruch am letzten passenden Leerzeichen, sonst nach dem letzten „=“, sonst nach
+    dem letzten „/“, sonst nach „- _ . :“ (siehe _command_break), sonst hart nach max_chars Zeichen; führende
+    Leerzeichen einer Folgezeile entfallen. Nichts geht verloren."""
+    text = " ".join(str(command).split())
+    max_chars = max(1, int(max_chars))
+    indent = max(0, min(indent, max_chars - 1))
+    lines, first = [], True
+    while text:
+        limit = max_chars if first else max_chars - indent
+        if len(text) <= limit:
+            line, text = text, ""
+        else:
+            cut = text.rfind(" ", 0, limit + 1)
+            if cut > 0:
+                line, text = text[:cut], text[cut + 1:]
+            else:
+                cut = _command_break(text, limit)
+                line, text = text[:cut], text[cut:]
+        lines.append(line if first else " " * indent + line)
+        text, first = text.lstrip(" "), False
+    return lines
+
 
 CSS = b"""
 window.ts { background: #1e1e1e; color: #e6e6e6; }
@@ -63,6 +199,17 @@ button.ts-seg { background: #2c2c2c; border: none; border-radius: 8px; box-shado
 button.ts-seg:checked { background: #3a3a3a; color: #fff; font-weight: bold; }
 button.ts-range { background: none; border: none; box-shadow: none; color: #9a9a9a; padding: 2px 6px; }
 button.ts-range:checked { color: #fff; font-weight: bold; }
+button.ts-acc { background: #2c2c2c; border: 1px solid #3a3a3a; border-radius: 8px; box-shadow: none;
+                color: #e6e6e6; padding: 3px 10px; }
+button.ts-acc:hover { background: #343434; }
+button.ts-acc.ts-sel { background: rgba(10, 132, 255, 0.18); border-color: #0a84ff; }
+button.ts-acc.ts-problem, button.ts-acc.ts-problem label { color: #a8a8a8; }
+.ts-bold { font-weight: bold; }
+button.ts-btn { background: #2c2c2c; border: 1px solid #3a3a3a; border-radius: 8px; box-shadow: none;
+                text-shadow: none; color: #e6e6e6; padding: 3px 10px; }
+button.ts-btn:hover { background: #343434; }
+button.ts-btn:active { background: #3a3a3a; }
+button.ts-btn label { color: #e6e6e6; text-shadow: none; }
 """
 
 
@@ -79,32 +226,40 @@ def short_path(path):
 
 def read_account(path):
     try:
-        account = json.load(open(path)).get("oauthAccount")
+        with open(path) as f:
+            account = json.load(f).get("oauthAccount")
     except (OSError, ValueError, AttributeError):
         return {}
     return account if isinstance(account, dict) else {}
 
 
 def discover_accounts():
-    """-> [{id, folder, dir, label}]: Standardkonto ~/.claude, dann ~/.claude-*/~/.claude_* mit .claude.json,
-    CLAUDE_CONFIG_DIR und TOKENSTATS_CLAUDE_DIRS. Derselbe Ordner und dieselbe Anmeldung (accountUuid) nur einmal."""
+    """-> [{id, folder, dir, label, source, state}] in der Reihenfolge Standard, automatisch gefunden, von Hand.
+
+    Standard: ~/.claude, nur wenn der Ordner da ist. Automatisch: ~/.claude-*/~/.claude_* mit .claude.json.
+    Von Hand: CLAUDE_CONFIG_DIR und TOKENSTATS_CLAUDE_DIRS; fehlt so ein Ordner, bleibt das Konto mit
+    Zustand „missingFolder“ in der Liste und wird nicht abgefragt. Derselbe Ordner (auch per Symlink) und
+    dieselbe Anmeldung (accountUuid) zählen nur einmal, es gilt der zuerst gefundene Eintrag."""
     try:
         names = sorted(n for n in os.listdir(HOME) if n.startswith((".claude-", ".claude_")))
     except OSError:
         names = []
-    folders = [None] + [f"{HOME}/{n}" for n in names
-                        if os.path.isdir(f"{HOME}/{n}") and os.path.isfile(f"{HOME}/{n}/.claude.json")]
+    candidates = [(None, "default")] + [(f"{HOME}/{n}", "auto") for n in names
+                                        if os.path.isdir(f"{HOME}/{n}") and os.path.isfile(f"{HOME}/{n}/.claude.json")]
     for extra in [os.environ.get("CLAUDE_CONFIG_DIR", "")] + os.environ.get(CLAUDE_DIRS_ENV, "").split(":"):
         if extra:
-            folders.append(os.path.abspath(os.path.expanduser(extra)).rstrip("/"))
+            candidates.append((os.path.abspath(os.path.expanduser(extra)).rstrip("/"), "manual"))
     accounts, real_seen, uuid_seen = [], set(), set()
-    for folder in folders:
+    for folder, source in candidates:
         path = folder or f"{HOME}/.claude"
+        exists = os.path.isdir(path)
+        if not exists and source != "manual":
+            continue   # Standardkonto ohne ~/.claude: noch nie angemeldet, also kein Konto
         real = os.path.realpath(path)
-        if real in real_seen or (folder and not os.path.isdir(path)):
+        if real in real_seen:
             continue
         real_seen.add(real)
-        account = read_account(f"{folder}/.claude.json" if folder else f"{HOME}/.claude.json")
+        account = read_account(f"{folder}/.claude.json" if folder else f"{HOME}/.claude.json") if exists else {}
         uuid = account.get("accountUuid")
         if uuid in uuid_seen:
             continue   # zweimal dieselbe Anmeldung: sonst doppelte Abfragen gegen dasselbe Rate-Limit
@@ -113,18 +268,81 @@ def discover_accounts():
         email, name = account.get("emailAddress") or "", account.get("displayName") or ""
         label = email.split("@")[0] or name or (os.path.basename(folder).lstrip(".") if folder else "Standard")
         accounts.append({"id": f"claude@{folder_hash(folder)}" if folder else "claude",
-                         "folder": folder, "dir": path, "label": label})
+                         "folder": folder, "dir": path, "label": label, "source": source,
+                         "state": OK if exists else MISSING_FOLDER})
     return accounts
 
 
+def worst_pct(info):
+    """Höchster Prozentwert eines Stands, None ohne Stand oder ohne Limits."""
+    return max((l["pct"] for l in (info or {}).get("limits") or []), default=None)
+
+
+def tightest_id(accounts):
+    """[{id, info}] -> ID des knappsten Kontos (höchstes Limit, bei Gleichstand das frühere);
+    hat keins einen Stand, das erste; ohne Konten None."""
+    best, best_pct = None, None
+    for account in accounts:
+        pct = worst_pct(account.get("info"))
+        if pct is not None and (best_pct is None or pct > best_pct):
+            best, best_pct = account["id"], pct
+    return best or (accounts[0]["id"] if accounts else None)
+
+
+def error_sentence(error):
+    """Fehlertext für die Anzeige: ein alter Cache-Text „HTTP 503“ wird zum Satz wie auf macOS."""
+    match = OLD_HTTP_ERROR_RE.match(error or "")
+    return f"Server antwortet mit HTTP {match.group(1)}." if match else error
+
+
+def account_view(account, info, note, count):
+    """Eintrag für die Anzeige. problem = grau mit „!“: Ordner fehlt, oder Abruffehler ohne Stand."""
+    missing = account["state"] == MISSING_FOLDER
+    note = error_sentence(note)
+    return {"id": account["id"], "label": account["label"], "state": account["state"],
+            "title": f"Claude · {account['label']}" if count > 1 else "Claude",
+            "folder": short_path(account["dir"]) if account["folder"] else None,
+            "info": info, "note": note, "pct": worst_pct(info),
+            "problem": missing or (not info and bool(note)),
+            "missing": MISSING_FOLDER_TEXT.format(path=short_path(account["dir"])) if missing else None,
+            "missingHint": MISSING_FOLDER_HINT if missing else None}
+
+
+def footer_note(page, account, usage_note):
+    """Hinweis in der Fußzeile: auf „Limits“ der des Kontos, aber nur mit Stand – ohne Stand steht er schon im
+    Inhalt (render_limits) und nicht noch einmal unten; auf „Verbrauch“ der Hinweis zum Einlesen."""
+    if page != "limits":
+        return usage_note
+    return account["note"] if account and account.get("info") else None
+
+
+def prefixed(prefix, parts):
+    """Stellt prefix vor die Teile; beginnen sie mit Text, auf derselben Zeile."""
+    if parts and parts[0]["kind"] == "text":
+        return [{"kind": "text", "text": f"{prefix} {parts[0]['text']}"}] + parts[1:]
+    return [{"kind": "text", "text": prefix}] + parts
+
+
+def pick_account(accounts, current_id):
+    """Gewähltes Konto: das mit current_id, sonst das knappste, ohne Konten None."""
+    by_id = {a["id"]: a for a in accounts}
+    return by_id.get(current_id) or by_id.get(tightest_id(accounts))
+
+
 def claude_command(account, args=""):
-    """Befehl für Hinweise: beim zweiten Konto mit Ordner, ein schlichtes `claude` erneuert nur das Standardkonto."""
+    """Befehl für Hinweise, in »…« (text_parts macht daraus eine eigene Zeile): beim zweiten Konto mit Ordner,
+    ein schlichtes »claude« erneuert nur das Standardkonto."""
     prefix = f"CLAUDE_CONFIG_DIR={short_path(account['folder'])} " if account["folder"] else ""
-    return f"`{prefix}claude{args}`"
+    return f"»{prefix}claude{args}«"
 
 
 def load_creds(account):
     return json.load(open(f"{account['dir']}/.credentials.json"))["claudeAiOauth"]
+
+
+def decimal(x, places=2):
+    """Zahl mit deutschem Komma und Punkt als Tausendertrenner: 1234.5 -> „1.234,50“."""
+    return f"{x:,.{places}f}".translate(str.maketrans(",.", ".,"))
 
 
 def plan_label(c):
@@ -154,7 +372,7 @@ def fetch_limits(c):
     if extra.get("is_enabled"):
         div = 10 ** extra.get("decimal_places", 2)
         cur = {"EUR": "€", "USD": "$"}.get(extra.get("currency"), extra.get("currency", ""))
-        extra = f"Extra {extra['used_credits'] / div:,.2f} {cur} / {extra['monthly_limit'] / div:,.2f} {cur}"
+        extra = f"Extra {decimal(extra['used_credits'] / div)} {cur} / {decimal(extra['monthly_limit'] / div)} {cur}"
     else:
         extra = None
     return {"plan": plan_label(c), "limits": rows, "extra": extra}
@@ -163,7 +381,8 @@ def fetch_limits(c):
 def read_cache():
     """-> {"accounts": {id: {info, attemptedAt, retryAt, error}}}"""
     try:
-        d = json.load(open(LIMITS_CACHE))
+        with open(LIMITS_CACHE) as f:
+            d = json.load(f)
     except (OSError, ValueError):
         return {"accounts": {}}
     if not isinstance(d, dict):
@@ -203,6 +422,8 @@ def save_entry(account, entry):
 
 def _limits_with_cache(account):
     """-> (Stand, Fehlertext) eines Kontos. Fragt nur ab, wenn dessen letzte Abfrage lang genug her ist."""
+    if account.get("state") == MISSING_FOLDER:
+        return None, None   # Ordner fehlt: nicht abfragen, die Seite erklärt es
     now = time.time()
     entry = read_cache()["accounts"].get(account["id"]) or {}
     info = entry.get("info")
@@ -235,7 +456,7 @@ def _limits_with_cache(account):
             entry["retryAt"] = now + min(max(wait, MIN_INTERVAL_S), 86400)
             entry["error"] = f"Abfrage pausiert (Rate-Limit) · wieder ab {hhmm(entry['retryAt'])}"
         else:
-            entry["error"] = f"Anmeldung abgelaufen: {claude_command(account)} starten" if e.code == 401 else f"HTTP {e.code}"
+            entry["error"] = f"Anmeldung abgelaufen: {claude_command(account)} starten" if e.code == 401 else f"Server antwortet mit HTTP {e.code}."
     except Exception as e:
         entry["error"] = f"Offline ({type(e).__name__})"
     save_entry(account, entry)
@@ -244,7 +465,8 @@ def _limits_with_cache(account):
 
 def load_prices():
     try:
-        d = json.load(open(f"{HERE}/../../Sources/TokenStats/Resources/pricing.json"))
+        with open(f"{HERE}/../../Sources/TokenStats/Resources/pricing.json") as f:
+            d = json.load(f)
         return d["models"], d["asOf"]
     except (OSError, ValueError, KeyError):
         return {}, None
@@ -344,7 +566,21 @@ def value_of(counts, model):
 
 
 def fmt(n):
-    return f"{n / 1e6:.1f} M" if n >= 1e6 else f"{n / 1e3:.0f} k" if n >= 1e3 else str(n)
+    """Tokenzahl kurz, mit deutschem Komma: 2,8 M, 245 k, 12."""
+    return f"{decimal(n / 1e6, 1)} M" if n >= 1e6 else f"{n / 1e3:.0f} k" if n >= 1e3 else str(n)
+
+
+# Wochentag kurz und deutsch, unabhängig von LANG (strftime ergab „Mon“); Index wie date.weekday(), Montag = 0
+WEEKDAYS = ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
+
+
+def weekday_short(d):
+    return WEEKDAYS[d.weekday()]
+
+
+def money(v):
+    """API-Vergleichswert in Dollar, deutsch geschrieben: 2,09 $."""
+    return f"{decimal(v)} $"
 
 
 def until(iso):
@@ -353,16 +589,26 @@ def until(iso):
 
 
 def dur(secs):
-    d, r = divmod(int(secs), 86400); h, r = divmod(r, 3600)
-    if d:
-        return f"{d} d" if not h else f"{d} d {h} h"
-    return f"{h} h {r // 60} min" if h else f"{r // 60} min"
+    """Wie Format.duration auf macOS, bewusst grob: „40 Min.“, „5 Std.“, „1 Tag“, „4 Tage“ (kaufmännisch gerundet)."""
+    minutes = secs / 60
+    if minutes < 90:
+        return f"{max(1, int(minutes + 0.5))} Min."
+    hours = minutes / 60
+    if hours < 24:
+        return f"{int(hours + 0.5)} Std."
+    days = int(hours / 24 + 0.5)
+    return "1 Tag" if days == 1 else f"{days} Tage"
 
 
 # ---------- widgets ----------
 
 def color_for(pct):
     return RED if pct >= 100 else YELLOW if pct >= 80 else GREEN
+
+
+def text_color_for(pct):
+    """Textfarbe zum Zustand (siehe RED_TEXT): Prozente, Pace-Text, Abzeichen."""
+    return RED_TEXT if pct >= 100 else hexc(color_for(pct))
 
 
 def rgb(hexcolor):
@@ -439,9 +685,67 @@ class BarChart(Gtk.DrawingArea):
 def label(text, css=None, xalign=0, wrap=False):
     l = Gtk.Label(label=text, xalign=xalign)
     l.set_line_wrap(wrap)
+    if wrap:   # nichts kürzen: lange Wörter und Pfade brechen notfalls mitten im Wort um
+        l.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
     for c in (css or "").split():
         l.get_style_context().add_class(c)
     return l
+
+
+class CommandLabel(Gtk.Label):
+    """Befehl in Monospace, mit wrap_command auf die zugeteilte Breite umgebrochen: nie abgeschnitten, nie
+    breiter als verfügbar. Die Höhe für eine Breite rechnet das Label selbst (Zeichenbreite per Pango-Layout);
+    nach dem Zuteilen der Breite setzt es den umgebrochenen Text."""
+    MIN_CHARS = 12
+
+    def __init__(self, command, css="ts-dim"):
+        super().__init__(xalign=0)
+        self.command, self.max_chars = command, None
+        for c in f"{css} ts-mono".split():
+            self.get_style_context().add_class(c)
+        self.set_text(" ".join(command.split()))
+        self.connect("size-allocate", self.on_allocate)
+
+    def char_width(self):
+        return self.create_pango_layout("0" * 20).get_pixel_size()[0] / 20 or 8
+
+    def lines_for(self, width):
+        return wrap_command(self.command, max(1, int(width // self.char_width())))
+
+    def do_get_request_mode(self):
+        return Gtk.SizeRequestMode.HEIGHT_FOR_WIDTH
+
+    def do_get_preferred_width(self):
+        return command_label_widths(self.char_width(), self.command, self.MIN_CHARS)
+
+    def do_get_preferred_height_for_width(self, width):
+        height = self.create_pango_layout("\n".join(self.lines_for(width))).get_pixel_size()[1]
+        return height, height
+
+    def do_get_preferred_height(self):
+        return self.do_get_preferred_height_for_width(self.do_get_preferred_width()[0])
+
+    def on_allocate(self, _widget, allocation):
+        max_chars = max(1, int(allocation.width // self.char_width()))
+        if max_chars != self.max_chars:
+            self.max_chars = max_chars
+            # nicht mitten in der Größenzuteilung neu setzen; die Höhe dafür ist schon eingeplant
+            GLib.idle_add(self.set_text, "\n".join(wrap_command(self.command, max_chars)))
+
+
+def parts_box(parts, css="ts-dim"):
+    """Satzteile umbrechend, kurze Befehle im Satz in Monospace (inline_parts), längere je auf eigenen Zeilen,
+    siehe CommandLabel."""
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    for part in inline_parts(parts):
+        if part["kind"] == "cmd":
+            widget = CommandLabel(part["text"], css)
+        else:
+            widget = label(part["text"], css, wrap=True)
+            if any(seg["mono"] for seg in part["segments"]):
+                widget.set_markup(segments_markup(part["segments"]))
+        box.pack_start(widget, False, False, 0)
+    return box
 
 
 def markup(l, color):
@@ -458,7 +762,7 @@ class Popup(Gtk.Window):
         super().__init__(title="Token Stats")
         self.app = app
         self.get_style_context().add_class("ts")
-        self.set_default_size(400, 640)
+        self.set_default_size(WIDTH, HEIGHT)
         self.set_resizable(False)
         self.set_decorated(False)
         self.connect("delete-event", lambda *_: self.hide() or True)
@@ -472,6 +776,9 @@ class Popup(Gtk.Window):
             LayerShell.set_keyboard_mode(self, LayerShell.KeyboardMode.ON_DEMAND)
         self.page, self.range = "limits", "7d"
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        # Feste Breite 400 (Fenster nicht veränderbar): Kein Inhalt verlangt mehr Mindestbreite, Texte, Kontoleiste
+        # und Befehle (CommandLabel) brechen um, statt überzulaufen.
+        outer.set_size_request(WIDTH, HEIGHT)
         self.add(outer)
 
         head = Gtk.Box(spacing=8, margin=16)
@@ -485,9 +792,27 @@ class Popup(Gtk.Window):
         head.pack_end(seg, False, False, 0)
         outer.pack_start(head, False, False, 0)
 
-        # ein Tab je Konto; auf „Verbrauch“ einer für Claude, weil die Logs kein Konto nennen
-        self.tabs = Gtk.Box(margin_left=10)
-        outer.pack_start(self.tabs, False, False, 0)
+        # Anbieter-Leiste: ein fester Eintrag „Claude“ auf beiden Seiten, der Punkt zeigt das knappste Konto
+        tabs = Gtk.Box(margin_left=10)
+        self.provider_tab = Gtk.ToggleButton(); self.provider_tab.get_style_context().add_class("ts-tab")
+        self.provider_label = Gtk.Label(label="● Claude")
+        self.provider_tab.add(self.provider_label)
+        self.provider_tab.set_active(True)
+        self.provider_tab.connect("toggled", lambda b: b.get_active() or b.set_active(True))
+        tabs.pack_start(self.provider_tab, False, False, 0)
+        outer.pack_start(tabs, False, False, 0)
+        # Kontoleiste: nur auf „Limits“ und ab zwei Konten; bricht um, statt das Fenster zu verbreitern
+        self.account_bar = Gtk.FlowBox(margin_left=16, margin_right=16, margin_top=4, margin_bottom=10)
+        self.account_bar.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.account_bar.set_homogeneous(False)
+        self.account_bar.set_min_children_per_line(1)
+        self.account_bar.set_max_children_per_line(64)
+        self.account_bar.set_row_spacing(6); self.account_bar.set_column_spacing(6)
+        # Volle Breite (FILL), sonst bekommt die FlowBox nur die Breite eines Chips und stellt jeden in eine eigene
+        # Zeile; die Chips selbst bleiben links bündig (FlowBoxChild und Button mit START)
+        self.account_bar.set_halign(Gtk.Align.FILL)
+        self.account_bar.set_no_show_all(True)   # Sichtbarkeit steuert render_tabs
+        outer.pack_start(self.account_bar, False, False, 0)
         outer.pack_start(Gtk.Separator(), False, False, 0)
 
         self.body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, margin=16, spacing=14)
@@ -496,11 +821,15 @@ class Popup(Gtk.Window):
         outer.pack_start(sw, True, True, 0)
 
         foot = Gtk.Box(spacing=8); foot.get_style_context().add_class("ts-foot")
-        self.status = label("", "ts-dim")
+        self.status = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)   # Stand und Hinweis, siehe render()
+        self.status.set_valign(Gtk.Align.CENTER)   # „Stand …“ mittig zu den Knöpfen, nicht oben
         foot.pack_start(self.status, True, True, 0)
         rb = Gtk.Button(label="⟳"); rb.connect("clicked", lambda *_: app.refresh())
-        foot.pack_end(rb, False, False, 0)
         qb = Gtk.Button(label="Beenden"); qb.connect("clicked", lambda *_: Gtk.main_quit())
+        for b in (rb, qb):   # dunkel wie das Popup, unabhängig vom System-Theme (Adwaita hell o. ä.)
+            b.get_style_context().add_class("ts-btn")
+            b.set_valign(Gtk.Align.CENTER)
+        foot.pack_end(rb, False, False, 0)
         foot.pack_end(qb, False, False, 0)
         outer.pack_end(foot, False, False, 0)
         self.page_btns["limits"].set_active(True)
@@ -543,25 +872,48 @@ class Popup(Gtk.Window):
             self.range = key
             self.render()
 
-    def on_tab(self, btn, index):
-        if not btn.get_active():
-            btn.set_active(True)   # nur ein Klick auf den aktiven Tab schaltet ab; der bleibt aktiv
-            return
-        if self.page == "limits" and self.app.current != index:
-            self.app.current = index
-            self.render()
+    def on_account(self, _btn, account_id):
+        if self.app.current_id != account_id:
+            self.app.current_id = account_id
+            GLib.idle_add(self.render)   # nicht im Klick des Knopfs, den render() gleich ersetzt
+
+    def account_chip(self, account, selected):
+        """Knopf der Kontoleiste: Zustandspunkt und Bezeichnung (ungekürzt), Fehlerkonto grau mit „!“."""
+        problem, pct = account["problem"], account["pct"]
+        box = Gtk.Box(spacing=6)
+        box.pack_start(markup(label("●"), hexc(GREY if problem or pct is None else color_for(pct))), False, False, 0)
+        box.pack_start(label(account["label"], wrap=True), False, False, 0)
+        if problem:
+            box.pack_start(label("!", "ts-bold"), False, False, 0)
+        button = Gtk.Button(halign=Gtk.Align.START)
+        button.add(box)
+        ctx = button.get_style_context()
+        ctx.add_class("ts-acc")
+        if selected:
+            ctx.add_class("ts-sel")
+        if problem:
+            ctx.add_class("ts-problem")
+        button.connect("clicked", self.on_account, account["id"])
+        child = Gtk.FlowBoxChild(halign=Gtk.Align.START)
+        child.add(button)
+        return child
 
     def render_tabs(self):
-        for c in self.tabs.get_children():
+        a = self.app
+        tightest = pick_account(a.accounts, None)
+        pct = tightest["pct"] if tightest and not tightest["problem"] else None
+        self.provider_label.set_markup(f'<span foreground="{hexc(GREY if pct is None else color_for(pct))}">●</span> Claude')
+        for c in self.account_bar.get_children():
             c.destroy()
-        accounts = self.app.accounts
-        titles = [a["title"] for a in accounts] if self.page == "limits" and len(accounts) > 1 else ["Claude"]
-        for index, title in enumerate(titles):
-            t = Gtk.ToggleButton(label=f"● {title}"); t.get_style_context().add_class("ts-tab")
-            t.set_active(len(titles) == 1 or index == self.app.current)
-            t.connect("toggled", self.on_tab, index)
-            self.tabs.pack_start(t, False, False, 0)
-        self.tabs.show_all()
+        if self.page == "limits" and len(a.accounts) > 1:
+            current = a.account()
+            for account in a.accounts:
+                chip = self.account_chip(account, account is current)
+                chip.show_all()
+                self.account_bar.add(chip)
+            self.account_bar.show()
+        else:
+            self.account_bar.hide()
 
     def render(self):
         for c in self.body.get_children():
@@ -569,26 +921,43 @@ class Popup(Gtk.Window):
         a = self.app
         self.render_tabs()
         account = a.account()
-        warning = (account or {}).get("note") if self.page == "limits" else a.note
-        note = f"  ·  ⚠ {warning}" if warning else ""
-        self.status.set_text((f"Stand {a.updated:%H:%M}" if a.updated else "lädt …") + note)
-        (self.render_limits if self.page == "limits" else self.render_usage)()
+        warning = footer_note(self.page, account, a.note)
+        stand = f"Stand {a.updated:%H:%M}" if a.updated else "lädt …"
+        for c in self.status.get_children():
+            c.destroy()
+        parts = text_parts(warning)
+        status = parts_box(prefixed(f"{stand}  ·  ⚠", parts) if parts else [{"kind": "text", "text": stand}])
+        status.show_all()
+        self.status.pack_start(status, False, False, 0)
+        if a.updated and not a.accounts:
+            self.render_empty()
+        else:
+            (self.render_limits if self.page == "limits" else self.render_usage)()
         self.body.show_all()
+
+    def render_empty(self):
+        self.body.pack_start(label(EMPTY_TITLE, "ts-h", wrap=True), False, False, 0)
+        self.body.pack_start(parts_box(EMPTY_PARTS), False, False, 0)
 
     def render_limits(self):
         account = self.app.account()
+        if account and account["state"] == MISSING_FOLDER:
+            self.body.pack_start(label(account["title"], "ts-h", wrap=True), False, False, 0)
+            self.body.pack_start(markup(label(account["missing"], wrap=True), RED_TEXT), False, False, 0)
+            self.body.pack_start(label(account["missingHint"], "ts-dim", wrap=True), False, False, 0)
+            return
         info = account and account["info"]
         if not info:
             text = account["note"] if account and account["note"] else "Lädt …"
             if account and len(self.app.accounts) > 1:
-                self.body.pack_start(label(account["title"], "ts-h"), False, False, 0)
-            self.body.pack_start(label(text, "ts-dim", wrap=True), False, False, 0)
+                self.body.pack_start(label(account["title"], "ts-h", wrap=True), False, False, 0)
+            self.body.pack_start(parts_box(text_parts(text)), False, False, 0)
             return
         worst = max((r["pct"] for r in info["limits"]), default=0)
         h = Gtk.Box(spacing=8)
-        h.pack_start(label(account["title"], "ts-h"), False, False, 0)
+        h.pack_start(label(account["title"], "ts-h", wrap=True), False, False, 0)   # darf zweizeilig werden
         h.pack_start(label(info["plan"], "ts-dim ts-mono"), False, False, 0)
-        pill = markup(label(f"{worst:.0f} %", "ts-pill"), hexc(color_for(worst)))
+        pill = markup(label(f"{worst:.0f} %", "ts-pill"), text_color_for(worst))
         h.pack_end(pill, False, False, 0)
         self.body.pack_start(h, False, False, 0)
         for r in info["limits"]:
@@ -596,7 +965,7 @@ class Popup(Gtk.Window):
             top = Gtk.Box(spacing=8)
             top.pack_start(label(r["title"], "ts-h"), False, False, 0)
             top.pack_start(label(r["sub"], "ts-dim"), False, False, 0)
-            top.pack_end(markup(label(f"{r['pct']:.0f} %", "ts-h"), hexc(color_for(r["pct"]))), False, False, 0)
+            top.pack_end(markup(label(f"{r['pct']:.0f} %", "ts-h"), text_color_for(r["pct"])), False, False, 0)
             box.pack_start(top, False, False, 0)
             left = until(r["reset"]) if r["reset"] else None
             elapsed = None if left is None else 1 - left / r["window"]
@@ -605,17 +974,17 @@ class Popup(Gtk.Window):
             reset_txt = ""
             if r["reset"]:
                 rt = datetime.fromisoformat(r["reset"]).astimezone()
-                fmt_t = "%H:%M" if left < 86400 else "%a %H:%M"
-                reset_txt = f"Reset {rt.strftime(fmt_t)}"
+                day = "" if left < 86400 else f"{weekday_short(rt)} "
+                reset_txt = f"Reset {day}{rt:%H:%M}"
             bottom.pack_start(label(reset_txt, "ts-dim"), False, False, 0)
             if elapsed is not None:
                 gap = (r["pct"] / 100 - elapsed) * r["window"]
                 if abs(gap) < r["window"] * 0.02:
                     txt, col = "im Takt", None
                 elif gap > 0:
-                    txt, col = f"{dur(gap)} vorgegriffen", hexc(color_for(r["pct"]))
+                    txt, col = f"{dur(gap)} vorgegriffen", text_color_for(r["pct"])
                 else:
-                    txt, col = f"{dur(-gap)} ungenutzt", hexc(color_for(r["pct"]))
+                    txt, col = f"{dur(-gap)} ungenutzt", text_color_for(r["pct"])
                 l = label(txt, "ts-dim")
                 bottom.pack_end(markup(l, col) if col else l, False, False, 0)
             box.pack_start(bottom, False, False, 0)
@@ -629,7 +998,8 @@ class Popup(Gtk.Window):
     def render_usage(self):
         usage = self.app.usage
         today = datetime.now().astimezone().date()
-        accounts = self.app.accounts
+        # gezählt werden die Konten, deren Protokolle eingelesen werden (ohne fehlende Ordner)
+        accounts = [a for a in self.app.accounts if a["state"] == OK]
         info = accounts[0]["info"] if accounts else None
         h = Gtk.Box(spacing=8)
         h.pack_start(label("Claude", "ts-h"), False, False, 0)
@@ -657,7 +1027,7 @@ class Popup(Gtk.Window):
                 for i in range(5):
                     per_model[model][i] += c[i]
                 day_tokens += sum(c)
-            series.append((d.strftime("%a")[:2] if n <= 7 else str(d.day), day_tokens, d == today))
+            series.append((weekday_short(d) if n <= 7 else str(d.day), day_tokens, d == today))
         total = sum(sum(c) for c in per_model.values())
         cache = sum(c[2] + c[3] + c[4] for c in per_model.values())
         for model, c in per_model.items():
@@ -669,7 +1039,7 @@ class Popup(Gtk.Window):
 
         cards = Gtk.Box(spacing=10, homogeneous=True)
         for title, big, small in (("TOKENS", fmt(total), f"{fmt(cache)} davon Cache"),
-                                  ("API-VERGLEICHSWERT", f"{total_val:,.2f} $", "zu Listenpreisen")):
+                                  ("API-VERGLEICHSWERT", money(total_val), "zu Listenpreisen")):
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             card.get_style_context().add_class("ts-card")
             card.pack_start(label(title, "ts-dim"), False, False, 0)
@@ -685,7 +1055,7 @@ class Popup(Gtk.Window):
             row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
             top = Gtk.Box()
             top.pack_start(label(model_name(model), "ts-h"), False, False, 0)
-            top.pack_end(label(f"{v:,.2f} $" if v is not None else "k. A.", "ts-h"), False, False, 0)
+            top.pack_end(label(money(v) if v is not None else "k. A.", "ts-h"), False, False, 0)
             row.pack_start(top, False, False, 0)
             row.pack_start(label(f"{fmt(c[0])} Input · {fmt(c[1])} Output · {fmt(c[2] + c[3] + c[4])} Cache", "ts-dim"),
                            False, False, 0)
@@ -694,7 +1064,7 @@ class Popup(Gtk.Window):
         tot = Gtk.Box()
         tot.pack_start(label(f"{n} Tage · {fmt(total)} Tokens" if n > 1 else f"Heute · {fmt(total)} Tokens", "ts-h"),
                        False, False, 0)
-        tot.pack_end(label(f"{total_val:,.2f} $", "ts-h"), False, False, 0)
+        tot.pack_end(label(money(total_val), "ts-h"), False, False, 0)
         self.body.pack_start(tot, False, False, 0)
         asof = f" (Stand {PRICES_AS_OF})" if PRICES_AS_OF else ""
         source = (f"aller {len(accounts)} Konten zusammen (die Protokolle nennen kein Konto)"
@@ -803,8 +1173,8 @@ class App:
         prov = Gtk.CssProvider(); prov.load_from_data(CSS)
         Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), prov,
                                                  Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        # accounts: [{id, label, title, info, note}], current: Index des aktiven Tabs
-        self.accounts, self.current, self.usage, self.note, self.updated = [], 0, {}, "", None
+        # accounts: [account_view(...)], current_id: gewähltes Konto auf „Limits“ (None = das knappste)
+        self.accounts, self.current_id, self.usage, self.note, self.updated = [], None, {}, "", None
         self.popup = Popup(self)
         self.tray = Tray(self.toggle)
         self.refresh()
@@ -814,6 +1184,7 @@ class App:
         if self.popup.get_visible():
             self.popup.hide()
         else:
+            self.current_id = tightest_id(self.accounts)   # beim Öffnen ist das knappste Konto gewählt
             self.popup.show_at(x, y)
         return False
 
@@ -822,27 +1193,23 @@ class App:
         return True
 
     def account(self):
-        return self.accounts[min(self.current, len(self.accounts) - 1)] if self.accounts else None
+        return pick_account(self.accounts, self.current_id)
 
     def _work(self):
         found = discover_accounts()
-        accounts = []
-        for account in found:
-            info, note = limits_with_cache(account)
-            title = f"Claude · {account['label']}" if len(found) > 1 else "Claude"
-            accounts.append({"id": account["id"], "label": account["label"], "title": title, "info": info, "note": note})
+        accounts = [account_view(account, *limits_with_cache(account), len(found)) for account in found]
         note = ""
         try:
-            usage = collect_usage(found)
+            usage = collect_usage([account for account in found if account["state"] == OK])
         except Exception as e:
             usage, note = self.usage, f"Verbrauch: {type(e).__name__}"
         GLib.idle_add(self._apply, accounts, usage, note)
 
     def _apply(self, accounts, usage, note):
-        # aktiven Tab über die Konto-ID halten, falls ein Konto dazukommt oder wegfällt
-        active = self.account()["id"] if self.account() else None
+        # Auswahl über die Konto-ID halten; fällt das Konto weg (oder war noch keins da), das knappste
         self.accounts, self.usage, self.note = accounts, usage, note
-        self.current = next((i for i, a in enumerate(accounts) if a["id"] == active), 0)
+        if not any(a["id"] == self.current_id for a in accounts):
+            self.current_id = tightest_id(accounts)
         self.updated = datetime.now()
         worst = max((r["pct"] for a in accounts if a["info"] for r in a["info"]["limits"]), default=0)
         self.tray.set_percent(worst)

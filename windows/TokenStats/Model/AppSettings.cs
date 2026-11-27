@@ -80,11 +80,24 @@ public sealed class AppSettings
     /// <summary>Eigene Bezeichnungen der Konten, Konto-ID → Text.</summary>
     public IReadOnlyDictionary<string, string> AccountLabels => stored.AccountLabels;
 
+    /// <summary>Höchstlänge einer eigenen Bezeichnung; ältere, längere Werte werden nicht gekürzt angezeigt.</summary>
+    public const int MaxAccountLabelLength = 24;
+
+    /// <summary>Leer = automatische Bezeichnung. Längere Eingaben werden auf <see cref="MaxAccountLabelLength"/> Zeichen begrenzt.</summary>
     public void SetAccountLabel(string id, string? label) => Set(() =>
     {
         if (string.IsNullOrWhiteSpace(label)) stored.AccountLabels.Remove(id);
-        else stored.AccountLabels[id] = label.Trim();
+        else stored.AccountLabels[id] = LimitLabel(label);
     });
+
+    public static string LimitLabel(string label)
+    {
+        var text = label.Trim();
+        if (text.Length <= MaxAccountLabelLength) return text;
+        // Kein halbes Ersatzzeichenpaar (Emoji) am Ende stehen lassen.
+        var length = char.IsHighSurrogate(text[MaxAccountLabelLength - 1]) ? MaxAccountLabelLength - 1 : MaxAccountLabelLength;
+        return text[..length].TrimEnd();
+    }
 
     /// <summary>Ausgeblendete Konten: nicht abgefragt, nicht angezeigt, nicht im Verbrauch.</summary>
     public bool IsHidden(string id) => stored.HiddenAccounts.Contains(id);
@@ -101,15 +114,18 @@ public sealed class AppSettings
     public void AddAccountFolder(string kind, string path) => Set(() =>
     {
         var folders = stored.AccountFolders.TryGetValue(kind, out var list) ? list : stored.AccountFolders[kind] = [];
-        if (!folders.Contains(path, StringComparer.OrdinalIgnoreCase)) folders.Add(path);
+        // Ein Ordner, der schon in der Liste steht, wird nicht doppelt gespeichert – auch nicht mit „\“ am Ende.
+        if (!folders.Any(folder => string.Equals(FullPath(folder), FullPath(path), StringComparison.OrdinalIgnoreCase))) folders.Add(path);
     });
 
     public void RemoveAccountFolder(string kind, string path) => Set(() =>
     {
         if (!stored.AccountFolders.TryGetValue(kind, out var folders)) return;
-        folders.RemoveAll(folder => string.Equals(Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar), path, StringComparison.OrdinalIgnoreCase));
+        folders.RemoveAll(folder => string.Equals(FullPath(folder), FullPath(path), StringComparison.OrdinalIgnoreCase));
         if (folders.Count == 0) stored.AccountFolders.Remove(kind);
     });
+
+    static string FullPath(string path) => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
     void Set(Action change)
     {

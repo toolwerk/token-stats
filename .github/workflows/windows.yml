@@ -44,3 +44,47 @@ jobs:
           name: TokenStats-${{ matrix.runtime }}
           path: build/windows/${{ matrix.runtime }}/TokenStats.exe
           retention-days: 14
+
+  # README- und Prüfbilder mit Demo-Werten (windows/README.md), nur von Hand gestartet: Debug-Build im
+  # Modus TOKENSTATS_SCREENSHOTS, die PNG-Dateien hängen als Artefakt „windows-screenshots“ am Lauf.
+  screenshots:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet build TokenStats/TokenStats.csproj --configuration Debug
+      - name: Screenshots rendern
+        env:
+          TOKENSTATS_SCREENSHOTS: ${{ runner.temp }}\shots
+        run: |
+          $exe = Get-ChildItem TokenStats\bin\Debug -Recurse -Filter TokenStats.exe | Select-Object -First 1
+          if (-not $exe) { throw "TokenStats.exe nicht gefunden" }
+          $process = Start-Process -FilePath $exe.FullName -PassThru
+          $null = $process.Handle   # sonst bleibt ExitCode leer
+          if (-not $process.WaitForExit(300000)) {
+            $process.Kill()
+            throw "Zeitüberschreitung: Die App hat sich nach 5 Minuten nicht beendet."
+          }
+          $failure = Join-Path $env:TOKENSTATS_SCREENSHOTS 'screenshots-error.txt'
+          if (Test-Path $failure) {
+            Get-Content $failure
+            throw "Screenshots mit Fehler abgebrochen."
+          }
+          if ($process.ExitCode -ne 0) { throw "Die App endete mit Code $($process.ExitCode)." }
+          $images = @(Get-ChildItem $env:TOKENSTATS_SCREENSHOTS -Filter *.png)
+          if ($images.Count -eq 0) { throw "Keine PNG-Dateien entstanden." }
+          $images | ForEach-Object { $_.Name }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-screenshots
+          path: ${{ runner.temp }}/shots
+          if-no-files-found: error
+          retention-days: 14

@@ -29,7 +29,20 @@ struct AccountSource: Sendable, Equatable {
     enum Origin: Int, Sendable, Comparable {
         case standard, detected, manual
         static func < (lhs: Origin, rhs: Origin) -> Bool { lhs.rawValue < rhs.rawValue }
+
+        /// Abzeichen in den Einstellungen.
+        var badge: String {
+            switch self {
+            case .standard: "Standard"
+            case .detected: "automatisch gefunden"
+            case .manual: "von Hand"
+            }
+        }
     }
+
+    /// Höchstlänge einer eigenen Bezeichnung (Sven, 27.11.2026): passt in jeder Widget-Größe
+    /// in höchstens zwei Titelzeilen. Gilt bei der Eingabe; angezeigt wird nie gekürzt.
+    static let maxLabelLength = 24
 
     /// Konfigurationsordner (`~/.claude-2`); `nil` bei Anbietern mit fester Quelle.
     var folder: URL?
@@ -45,6 +58,14 @@ struct AccountSource: Sendable, Equatable {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let path = folder.path
         return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
+    }
+
+    /// Woher die automatische Bezeichnung kommt, für den Hinweis unter dem Eingabefeld.
+    var automaticLabelSource: String? {
+        if let email, let local = email.split(separator: "@").first, !local.isEmpty { return "aus der E-Mail" }
+        if let name, !name.isEmpty { return "aus dem Kontonamen" }
+        if folder != nil { return "aus dem Ordnernamen" }
+        return nil
     }
 
     /// Automatische Bezeichnung: lokaler Teil der E-Mail, Anzeigename, Ordnername.

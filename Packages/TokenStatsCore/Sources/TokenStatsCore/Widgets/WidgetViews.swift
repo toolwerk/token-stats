@@ -25,21 +25,299 @@ public struct WidgetPlaceholder: View {
 }
 
 /// Kopfzeile der Widgets: Roboter · Titel · rechts der Zustandspunkt des knappsten Limits.
+///
+/// Nichts wird gekürzt (SPEC §6). Passt nicht alles in eine Zeile, nimmt der Kopf die erste
+/// passende Form: Details unter dem Titel; Titel am „·“ geteilt („Claude“ / „· Kunde A“);
+/// Kontoname zweizeilig mit „Claude · Tarif“ darunter; erst zuletzt freier Umbruch. So hat ein
+/// Kontoname bis 24 Zeichen höchstens zwei Titelzeilen. Die Stufen S1–S8 aus „Widgets
+/// einheitlich“ (#4) ersetzen das später.
 struct WidgetHeader: View {
     let title: String
     let detail: String?
     let severity: Severity?
+    /// Pflichtdetail, das nie wegfällt und eine eigene Zeile über dem Tarif bekommt:
+    /// „knappstes Konto“, wenn das gezeigte Konto von selbst wechselt.
+    var selection: String? = nil
+
+    private static let titleFont = Font.system(size: 12, weight: .bold)
+    private static let detailFont = Font.system(size: 10.5)
 
     var body: some View {
-        HStack(spacing: 6) {
-            RobotIcon(size: 13)
-            Text(title).font(.system(size: 12, weight: .bold)).lineLimit(1).fixedSize()
-            if let detail {
-                Text(detail).font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+        let parts = title.components(separatedBy: " · ")
+        let kind = parts.count > 1 ? parts[0] : nil
+        let account = parts.count > 1 ? parts.dropFirst().joined(separator: " · ") : nil
+        let splits = account.map(Self.twoLineSplits) ?? []
+        ViewThatFits(in: .horizontal) {
+            // Eine Zeile.
+            row(alignment: .center, dot: true) {
+                HStack(spacing: 6) {
+                    line(title, Self.titleFont)
+                    if let inline = [selection, detail].compactMap({ $0 }).joined(separator: " · ").nilIfEmpty {
+                        line(inline, Self.detailFont).foregroundStyle(.secondary)
+                    }
+                }
             }
-            Spacer(minLength: 0)
-            if let severity {
-                Circle().fill(severity.color).frame(width: 7, height: 7)
+            // Titel in einer Zeile, Details darunter. Beim knappsten Konto nicht: Dort steht in
+            // jeder Stufe zuerst der Kontoname, dann „knappstes Konto“, dann „Claude · Tarif“.
+            // Jede Form gibt es mit den Details in einer Zeile, mit „+N Limits“ in eigener Zeile
+            // und mit jedem Detail in eigener Zeile (`detailVariants`).
+            if selection == nil {
+                ForEach(0..<Self.detailVariantCount, id: \.self) { variant in
+                    row(dot: false) {
+                        stack([line(title, Self.titleFont)], details: Self.detailVariant([selection, detail], variant),
+                              dot: false, dotOnTitle: true)
+                    }
+                }
+            }
+            // Erst mit Punkt rechts im Kopf, dann mit Punkt in der Detailzeile (Titel 12 pt breiter).
+            // Kandidaten: Titel am „·“ („Claude“ / „· Kunde A“), dann der Kontoname zweizeilig an
+            // Leerzeichen oder Bindestrich mit „Claude · Tarif“ darunter.
+            if let kind, let account {
+                ForEach(Self.candidates(splits: splits.count, accountFirst: selection != nil), id: \.self) { candidate in
+                    let dotInRow = candidate.dotInRow
+                    // Der Punkt steht in der ersten Titelzeile, nicht neben dem ganzen Block: So
+                    // begrenzt er nur die Titelzeile, und die Details dürfen die volle Breite nutzen.
+                    row(dot: false) {
+                        let kindDetails = Self.detailVariant([selection, [kind, detail].compactMap { $0 }.joined(separator: " · ")],
+                                                             candidate.details)
+                        if candidate.accountLine {
+                            stack([line(account, Self.titleFont)], details: kindDetails, dot: !dotInRow, dotOnTitle: dotInRow)
+                        } else if let index = candidate.split {
+                            stack([line(splits[index][0], Self.titleFont), line(splits[index][1], Self.titleFont)],
+                                  details: kindDetails, dot: !dotInRow, dotOnTitle: dotInRow)
+                        } else {
+                            // Der Trennpunkt beginnt die zweite Zeile („Claude“ / „· Kunde A“), statt
+                            // am Zeilenende zu hängen (Designer-Prüfung PR #5, Runde 5).
+                            stack([line(kind, Self.titleFont), line("· " + account, .system(size: 12))],
+                                  details: Self.detailVariant([selection, detail], candidate.details),
+                                  dot: !dotInRow, dotOnTitle: dotInRow)
+                        }
+                    }
+                }
+            }
+            // Letzter Ausweg: Titel bricht nur an Leerzeichen und Bindestrichen um, die Details an
+            // „ · “ und Leerzeichen; nie mitten im Wort und nie breiter als die Kachel – sonst
+            // drückt eine zu lange Detailzeile („Max 20× · +2 Limits“) den Inhalt an den rechten
+            // Rand (Designer-Prüfung PR #5, Runde 3).
+            // Wie Stufe S6–S8 des Entwurfs: im letzten Ausweg ist der Kontoname der Titel, „Claude · Tarif“
+            // steht in der Detailzeile – das spart eine Titelzeile (z. B. „MÖBELWERKSTATT“).
+            let accountFirst = kind != nil && account != nil
+            // Der Punkt steht hier rechts in der ersten Detailzeile (wie Stufe S7), damit der
+            // Titel die volle Breite hat – sonst ragte „· kundenbetreuung-“ in den Innenrand.
+            row(dot: false) {
+                VStack(alignment: .leading, spacing: 1) {
+                    // Gemessener Umbruch: Trennpunkt vorn, wenn „· Name“ passt, sonst am Zeilenende;
+                    // zu breite Einzelwörter („MÖBELWERKSTATT“) brechen zuletzt zeichenweise.
+                    WrappedTitle(accountFirst ? account! : title, size: 12)
+                    let details = (accountFirst ? [selection, [kind!, detail].compactMap { $0 }.joined(separator: " · ")] : [selection, detail])
+                        .compactMap { $0?.nilIfEmpty }
+                    ForEach(details.indices, id: \.self) { index in
+                        // spacing 0: Der Abstand zum Punkt kommt nur vom Spacer (Entwurf §3: sonst
+                        // werden aus 6 pt 12 pt und „Claude · Max 5×“ bricht um).
+                        HStack(alignment: .top, spacing: 0) {
+                            TokenFlow(spacing: Self.detailSpace) {
+                                ForEach(Array(Self.detailTokens(details[index]).enumerated()), id: \.offset) { _, token in
+                                    Text(token).font(Self.detailFont).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                                }
+                            }
+                            // Erst die Details, dann der Abstand zum Punkt – sonst teilt der HStack
+                            // die Breite auf, und „Claude · Max 5×“ bricht unnötig um.
+                            .layoutPriority(1)
+                            if index == 0, severity != nil {
+                                Spacer(minLength: 6)
+                                circle.padding(.top, 3)
+                            }
+                        }
+                    }
+                    if details.isEmpty, severity != nil {
+                        HStack(spacing: 0) { Spacer(minLength: 6); circle }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Stellen, an denen eine Detailzeile umbrechen darf: nach „ · “, sonst nach Leerzeichen,
+    /// wobei „+2 Limits“ und „Max 20×“ zusammenbleiben.
+    nonisolated static func detailTokens(_ text: String) -> [String] {
+        // Der Trennpunkt beginnt den nächsten Teil („Max 20×“ / „· +2 Limits“), wie im Titel.
+        // Kein Leerzeichen am Ende: Den Abstand setzt `TokenFlow` (`detailSpace`), und am
+        // Zeilenende zählt er nicht mit.
+        let parts = text.components(separatedBy: " · ")
+        return parts.enumerated().map { index, part in (index == 0 ? "" : "· ") + part }
+    }
+
+    /// Breite eines Leerzeichens in der Detailschrift – Abstand zwischen zwei Detail-Teilen.
+    nonisolated static let detailSpace: CGFloat = TextWidth.measure([(" ", .regular)], size: 10.5)
+
+    private func row(alignment: VerticalAlignment = .top, dot: Bool, @ViewBuilder _ content: () -> some View) -> some View {
+        // Abstände ausdrücklich, ohne Stack-Spacing obendrauf (Entwurf §3): Icon → Titel 6,
+        // Inhalt → Punkt mindestens 6.
+        HStack(alignment: alignment, spacing: 0) {
+            RobotIcon(size: 13)
+            content().padding(.leading, 6)
+            if dot {
+                Spacer(minLength: 6)
+                circle.padding(.top, alignment == .top ? 4 : 0)
+            }
+        }
+    }
+
+    @ViewBuilder private var circle: some View {
+        if let severity {
+            Circle().fill(severity.color).frame(width: 7, height: 7)
+        }
+    }
+
+    private func stack(_ titleLines: [AnyView], details: [String?], dot: Bool, dotOnTitle: Bool = false) -> some View {
+        // Kein Zusatzabstand zwischen den Kopfzeilen: Der Zeilenabstand der Schrift reicht, und
+        // in der kleinsten Kachel zählt jeder Punkt (Entwurf „Widgets einheitlich“ §4.1).
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(titleLines.indices, id: \.self) { index in
+                if index == 0, dotOnTitle, severity != nil {
+                    HStack(spacing: 0) {
+                        titleLines[index]
+                        Spacer(minLength: 6)
+                        circle
+                    }
+                } else {
+                    titleLines[index]
+                }
+            }
+            stackDetails(details, dot: dot)
+        }
+    }
+
+    /// Detailzeilen; mit `dot` steht der Zustandspunkt rechts in der ersten (Stufe S7).
+    @ViewBuilder
+    private func stackDetails(_ details: [String?], dot: Bool) -> some View {
+        let lines = details.compactMap { $0?.nilIfEmpty }
+        ForEach(lines.indices, id: \.self) { index in
+            HStack(spacing: 0) {
+                // Einzeilige Detailzeile in fester Höhe 12 pt (Entwurf §4.1); die Glyphen passen.
+                line(lines[index], Self.detailFont).foregroundStyle(.secondary).frame(height: 12)
+                if dot, index == 0, severity != nil {
+                    Spacer(minLength: 6)
+                    circle
+                }
+            }
+        }
+        if dot, lines.isEmpty, severity != nil {
+            HStack(spacing: 0) { Spacer(minLength: 6); circle }
+        }
+    }
+
+    /// Eine Zeile, die nie umbricht – passt sie nicht, scheitert die Form (`ViewThatFits`).
+    private func line(_ text: String, _ font: Font) -> AnyView {
+        AnyView(Text(text).font(font).lineLimit(1).fixedSize())
+    }
+
+    /// Eine Form des zweizeiligen Titels; `split == nil` = Teilung am „·“.
+    struct Candidate: Hashable {
+        var dotInRow: Bool
+        var split: Int?
+        /// Kontoname einzeilig als Titel, „Claude · Tarif“ darunter.
+        var accountLine = false
+        /// Welche Variante der Detailzeilen (`detailVariant`).
+        var details = 0
+    }
+
+    /// `accountFirst` beim knappsten Konto: statt der Teilung am „·“ der Kontoname als Titel.
+    /// Je Titelform zuerst die Details in einer Zeile, dann aufgeteilt.
+    static func candidates(splits: Int, accountFirst: Bool = false) -> [Candidate] {
+        [true, false].flatMap { dot in
+            ([Candidate(dotInRow: dot, split: nil, accountLine: accountFirst)]
+                + (0..<splits).map { Candidate(dotInRow: dot, split: $0) })
+                .flatMap { form in (0..<detailVariantCount).map { var c = form; c.details = $0; return c } }
+        }
+    }
+
+    static let detailVariantCount = 3
+
+    /// Detailzeilen in drei Stufen: wie gegeben; der letzte Teil der letzten Zeile („+2 Limits“)
+    /// in eigener Zeile; jeder Teil in eigener Zeile. Nie ein Bruch mitten in einem Teil.
+    nonisolated static func detailVariant(_ details: [String?], _ variant: Int) -> [String?] {
+        let lines = details.compactMap { $0?.nilIfEmpty }
+        switch variant {
+        case 0:
+            return lines
+        case 1:
+            guard let last = lines.last, let range = last.range(of: " · ", options: .backwards) else { return lines }
+            // Der Trennpunkt beginnt die neue Zeile, wie überall („Max 20×“ / „· +1 Limit“).
+            return lines.dropLast() + [String(last[..<range.lowerBound]), "· " + String(last[range.upperBound...])]
+        default:
+            return lines.flatMap { line in
+                line.components(separatedBy: " · ").enumerated().map { $0.offset == 0 ? $0.element : "· " + $0.element }
+            }
+        }
+    }
+
+    /// Stellen, an denen ein Name umbrechen darf: nach einem Leerzeichen oder Bindestrich.
+    /// „Kunde Schmidt Beratung“ → „Kunde “, „Schmidt “, „Beratung“.
+    nonisolated static func breakTokens(_ text: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        for character in text {
+            current.append(character)
+            if character == " " || character == "-" {
+                tokens.append(current)
+                current = ""
+            }
+        }
+        if !current.isEmpty { tokens.append(current) }
+        // Der Trennpunkt gehört zum folgenden Teil („· Kunde “) – für die zweizeiligen Teilungen.
+        // Den freien Umbruch mit Messung übernimmt `TitleWrap`.
+        var merged: [String] = []
+        var pending = ""
+        for token in tokens {
+            if token == "· " { pending += token; continue }
+            merged.append(pending + token)
+            pending = ""
+        }
+        if !pending.isEmpty { merged.append(pending) }
+        return merged
+    }
+
+    /// Alle Teilungen in zwei Zeilen an erlaubten Stellen, die längere erste Zeile zuerst.
+    nonisolated static func twoLineSplits(_ text: String) -> [[String]] {
+        let tokens = breakTokens(text)
+        guard tokens.count > 1 else { return [] }
+        return (1..<tokens.count).reversed().map { split in
+            [tokens[..<split].joined().trimmingCharacters(in: .whitespaces),
+             tokens[split...].joined().trimmingCharacters(in: .whitespaces)]
+        }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+/// Kurzmeter (Entwurf „Widgets einheitlich“ §3): eine Zeile je Limit, 14 pt – Name, 4-pt-Balken
+/// mit 8-pt-Pace-Marke, Prozent in 38 pt. Als Raster, damit die Namen eine gemeinsame Spalte
+/// bilden und alle Balken gleich lang sind, gleich beginnen und gleich enden (Designer-Prüfung
+/// PR #5, Runde 12). Letzte Stufe vor „nur Kopf“ im kleinen und mittleren Widget.
+struct ShortMeters: View {
+    let windows: [LimitWindow]
+    let now: Date
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 3) {
+            ForEach(windows) { window in
+                GridRow {
+                    Text(window.name).font(.system(size: 11, weight: .semibold)).lineLimit(1).fixedSize()
+                    MeterBar(percent: window.percent, elapsed: window.elapsedFraction(now: now),
+                             color: window.severity.color, markHeight: 8)
+                        .frame(height: 4)
+                    Text(Format.percent(window.percent))
+                        .font(.system(size: 11, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(window.severity.color)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .frame(width: 38, alignment: .trailing)
+                }
+                .frame(height: 14)
             }
         }
     }
@@ -51,10 +329,19 @@ struct MachineFooter: View {
 
     var body: some View {
         if let machine = snapshot.machine {
-            (Text(machine) + Text(" · vor ") + Text(snapshot.writtenAt, style: .relative))
-                .font(.system(size: 9.5))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            // Eine Zeile, wenn sie passt; sonst am „·“ gebrochen („Büro-Mac“ / „vor 12 Min., 0 Sek.“),
+            // nie gekürzt (Designer-Prüfung PR #5, Runden 10 und 11).
+            ViewThatFits(in: .horizontal) {
+                (Text(machine) + Text(" · vor ") + Text(snapshot.writtenAt, style: .relative))
+                    .lineLimit(1)
+                    .fixedSize()
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(machine).fixedSize(horizontal: false, vertical: true)
+                    (Text("vor ") + Text(snapshot.writtenAt, style: .relative)).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .font(.system(size: 9.5))
+            .foregroundStyle(.secondary)
         }
     }
 }
@@ -256,50 +543,145 @@ public struct LimitsWidgetView: View {
         }
     }
 
-    /// Welcher Anbieter gezeigt wird – gewählt oder der knappste, sonst der erste mit Stand.
-    public static func resolve(_ snapshot: WidgetSnapshot, provider: String?) -> WidgetSnapshot.Provider? {
+    /// Welches Konto gezeigt wird – gewählt oder das knappste, sonst das erste mit Stand.
+    /// Ein gewähltes Konto, das nicht im Stand steht, ergibt `nil` (kein stiller Wechsel).
+    public nonisolated static func resolve(_ snapshot: WidgetSnapshot, provider: String?) -> WidgetSnapshot.Provider? {
         if let provider { return snapshot.provider(provider) }
         return snapshot.tightest?.provider ?? snapshot.providers.first { $0.snapshot != nil } ?? snapshot.providers.first
+    }
+
+    /// Pflichtdetail bei „Claude – knappstes Konto“: Das gezeigte Konto wechselt von selbst.
+    private var selectionDetail: String? {
+        // Auch wenn ein ausgeblendetes Standardkonto durch das knappste ersetzt wird.
+        guard let provider, let snapshot, snapshot.showsTightestInstead(of: provider) else { return nil }
+        return "knappstes\u{00A0}Konto"
     }
 
     @ViewBuilder
     private func content(_ snapshot: WidgetSnapshot) -> some View {
         switch size {
         case .large:
-            VStack(alignment: .leading, spacing: 12) {
-                let providers = snapshot.providers.filter { $0.snapshot != nil }
-                if providers.isEmpty {
-                    WidgetHeader(title: "Limits", detail: nil, severity: nil)
-                    noData(snapshot.providers.first)
+            VStack(alignment: .leading, spacing: 0) {
+                if snapshot.providers.allSatisfy({ $0.snapshot == nil }) {
+                    headedNote(WidgetHeader(title: "Limits", detail: nil, severity: nil), noDataText(snapshot.providers.first))
                 } else {
-                    // Ab vier Konten passt je Konto nur eine Zeile, sonst fällt das letzte unten heraus.
-                    let maxWindows = providers.count > 3 ? 2 : 4
-                    ForEach(providers) { provider in
-                        section(provider, columns: 2, maxWindows: maxWindows, compact: true)
+                    // Breite messen: Die Tabelle wählt danach Stufe L5, statt im Wort zu brechen.
+                    GeometryReader { geometry in
+                        large(snapshot, width: geometry.size.width)
                     }
                 }
+                // Abstand zur Fußzeile nur, wenn es eine gibt (Stand über iCloud) – sonst kostete
+                // die leere Fußzeile unten 2 × 12 pt (Designer-Prüfung PR #5, Runde 9).
                 Spacer(minLength: 0)
-                MachineFooter(snapshot: snapshot)
+                if snapshot.machine != nil {
+                    MachineFooter(snapshot: snapshot).padding(.top, 12)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         case .medium, .small:
-            let provider = Self.resolve(snapshot, provider: provider)
-            VStack(alignment: .leading, spacing: 8) {
-                if let provider, provider.snapshot != nil {
-                    section(provider, columns: size == .medium ? 2 : 1, maxWindows: size == .medium ? 4 : 2, compact: true)
+            let shown = Self.resolve(snapshot, provider: provider)
+            VStack(alignment: .leading, spacing: 0) {
+                if let shown, let windows = shown.snapshot?.windows {
+                    // Passt nicht jedes Limit (langer Kontoname, kleine Kachel), lieber eins weniger
+                    // als ein abgeschnittenes – gezeigt werden dann die knappsten.
+                    let most = min(windows.count, size == .medium ? 4 : 2)
+                    // Stufen: volle Meter (alle … einer), dann Kurzmeter (eine Zeile je Limit, Entwurf
+                    // §3/§4.3), zuletzt nur der Kopf mit „+N Limits“ – lieber ein Kurzmeter als keiner,
+                    // und lieber keiner als ein abgeschnittener (Designer-Prüfung PR #5, Runde 11).
+                    let stages = (1...max(most, 1)).reversed().map { (count: $0, short: false) }
+                        + (1...max(most, 1)).reversed().map { (count: $0, short: true) }
+                        + [(count: 0, short: false)]
+                    ViewThatFits(in: .vertical) {
+                        ForEach(stages.indices, id: \.self) { index in
+                            VStack(alignment: .leading, spacing: 8) {
+                                section(shown, columns: size == .medium ? 2 : 1, maxWindows: stages[index].count, compact: true,
+                                        short: stages[index].short)
+                            }
+                        }
+                    }
+                } else if let shown {
+                    headedNote(WidgetHeader(title: shown.name, detail: nil, severity: nil, selection: selectionDetail),
+                               noDataText(shown))
+                } else if let provider {
+                    // Gewähltes Konto steht nicht im Stand: beim Namen nennen, nie als `claude@…`.
+                    headedNote(WidgetHeader(title: LimitsAccounts.choice(for: provider, in: snapshot).title, detail: nil, severity: nil),
+                               LimitsAccounts.missingMessage)
                 } else {
-                    WidgetHeader(title: provider?.name ?? "Limits", detail: nil, severity: nil)
-                    noData(provider)
+                    headedNote(WidgetHeader(title: "Limits", detail: nil, severity: nil), noDataText(nil))
                 }
                 Spacer(minLength: 0)
-                MachineFooter(snapshot: snapshot)
+                if snapshot.machine != nil {
+                    MachineFooter(snapshot: snapshot).padding(.top, 8)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
     private func noData(_ provider: WidgetSnapshot.Provider?) -> some View {
-        Text(provider?.message ?? "Noch kein Stand – Token Stats fragt beim nächsten Takt ab.")
+        note(noDataText(provider))
+    }
+
+    private func noDataText(_ provider: WidgetSnapshot.Provider?) -> String {
+        provider?.message ?? "Noch kein Stand – Token Stats fragt beim nächsten Takt ab."
+    }
+
+    /// Kopf und Hinweis mit Ausweichstufen (`CommandSplit.shortVariants`): Passt der volle Satz
+    /// nicht in die Kachel, steht der kürzere da – nie ragt Text in den unteren Innenrand
+    /// (Designer-Prüfung PR #5, Runde 4: „keine Anmeldung“ in der kleinsten Kachel).
+    private func headedNote(_ header: WidgetHeader, _ text: String) -> some View {
+        ViewThatFits(in: .vertical) {
+            ForEach(CommandSplit.shortVariants(text), id: \.self) { variant in
+                VStack(alignment: .leading, spacing: 8) {
+                    header
+                    note(variant)
+                }
+            }
+        }
+    }
+
+    /// Großes Widget, alle sichtbaren Konten: erst Abschnitte mit allen Limits, passt das
+    /// nicht, die Tabelle mit allen Konten, dann mit Sammelzeile – nichts fällt still weg.
+    @ViewBuilder
+    private func large(_ snapshot: WidgetSnapshot, width: CGFloat) -> some View {
+        let rows = LimitsAccounts.rows(snapshot)
+        let stacked = LimitsAccountTable.needsStacked(rows, total: width)
+        let header = WidgetHeader(title: "Limits", detail: LimitsAccounts.countText(snapshot),
+                                  severity: snapshot.tightest?.window.severity)
+        // Mindestens vier Zeilen, sonst lieber die Abschnitte (Entwurf L4: k = n−1 … 4).
+        let partial = rows.count > 5 ? Array((4...(rows.count - 1)).reversed()) : []
+        ViewThatFits(in: .vertical) {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(snapshot.providers) { provider in
+                    if provider.snapshot != nil {
+                        section(provider, columns: 2, maxWindows: 4, compact: true)
+                    } else {
+                        VStack(alignment: .leading, spacing: 6) {
+                            WidgetHeader(title: provider.name, detail: nil, severity: nil)
+                            noData(provider)
+                        }
+                    }
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                header
+                LimitsAccountTable(rows: rows, shown: rows.count, now: now, stacked: stacked)
+            }
+            ForEach(partial, id: \.self) { shown in
+                VStack(alignment: .leading, spacing: 8) {
+                    header
+                    LimitsAccountTable(rows: rows, shown: shown, now: now, stacked: stacked)
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                header
+                LimitsAccountTable(rows: rows, shown: min(rows.count, 4), now: now, stacked: stacked)
+            }
+        }
+    }
+
+    private func note(_ text: String) -> some View {
+        CommandText(text)
             .font(.system(size: 11))
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -307,16 +689,25 @@ public struct LimitsWidgetView: View {
     }
 
     @ViewBuilder
-    private func section(_ provider: WidgetSnapshot.Provider, columns: Int, maxWindows: Int, compact: Bool) -> some View {
-        let windows = Array((provider.snapshot?.windows ?? []).prefix(maxWindows))
+    private func section(_ provider: WidgetSnapshot.Provider, columns: Int, maxWindows: Int, compact: Bool,
+                         short: Bool = false) -> some View {
+        // Ist kein Platz für alle, die knappsten – absteigend nach Prozent, bei Gleichstand in der
+        // Reihenfolge der App (Sven, 27.11.); die übrigen stehen als „+N Limits“ im Kopf. Passen
+        // alle, bleibt die Reihenfolge der App.
+        let picked = LimitsAccounts.pick(provider.snapshot?.windows ?? [], maximum: maxWindows)
+        let windows = picked.shown
         // Die Spalten sind schmal; der Zusatz „7 d, alle Modelle“ passt nur im großen Widget.
         let showScope = size == .large
+        let plan = provider.isRateLimited ? "Abfrage pausiert" : provider.snapshot?.account?.plan
         WidgetHeader(
             title: provider.name,
-            detail: provider.isRateLimited ? "Abfrage pausiert" : provider.snapshot?.account?.plan,
-            severity: provider.snapshot?.tightestWindow?.severity
+            detail: [plan, LimitsAccounts.hiddenLimitsText(picked.hidden)].compactMap { $0 }.joined(separator: " · ").nilIfEmpty,
+            severity: provider.snapshot?.tightestWindow?.severity,
+            selection: size == .large ? nil : selectionDetail
         )
-        if columns == 1 {
+        if short {
+            ShortMeters(windows: windows, now: now)
+        } else if columns == 1 {
             ForEach(windows) { MeterRow(window: $0, compact: compact, showScope: showScope, stackDetails: true, now: now) }
         } else {
             let rows = stride(from: 0, to: windows.count, by: columns).map { Array(windows[$0..<min($0 + columns, windows.count)]) }

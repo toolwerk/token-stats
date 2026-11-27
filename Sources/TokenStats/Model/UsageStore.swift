@@ -24,15 +24,19 @@ final class UsageStore {
         var window: LimitWindow
     }
 
-    /// Alle erkannten Konten, auch ausgeblendete und nicht installierte.
-    private(set) var providers: [any UsageProvider]
+    /// Alle erkannten Konten mit Zustand, auch ausgeblendete, fehlende und doppelte –
+    /// die Einstellungen zeigen sie alle (SPEC §6 „Mehrere Konten“).
+    private(set) var entries: [AccountEntry]
     private(set) var states: [String: ProviderState] = [:]
     private(set) var loading: Set<String> = []
 
     private let settings: AppSettings
-    private let discover: (@MainActor () -> [any UsageProvider])?
+    private let discover: (@MainActor () -> [AccountEntry])?
     private var lastDiscovery: Date = .distantPast
-    private var isDemo = false
+    private(set) var isDemo = false
+    /// Nur im Demo-Modus: Bezeichnungen und Ausblenden im Speicher, nie in den UserDefaults.
+    private var demoLabels: [String: String] = [:]
+    private var demoHidden: Set<String> = []
     private var timer: Timer?
 
     /// Abstand zwischen zwei manuellen Aktualisierungen.
@@ -40,33 +44,121 @@ final class UsageStore {
     /// Konten höchstens so oft neu suchen (Ordnerliste + Kontodateien).
     static let discoveryInterval: TimeInterval = 60
 
-    /// `discover` findet die Konten neu (SPEC §6 „Mehrere Konten“); ohne bleibt `providers` fest.
-    init(providers: [any UsageProvider], settings: AppSettings, discover: (@MainActor () -> [any UsageProvider])? = nil) {
-        self.providers = providers
+    /// `discover` findet die Konten neu (SPEC §6 „Mehrere Konten“); ohne bleiben sie fest.
+    init(entries: [AccountEntry], settings: AppSettings, discover: (@MainActor () -> [AccountEntry])? = nil) {
+        self.entries = entries
         self.settings = settings
         self.discover = discover
         states = Self.loadCache()
     }
 
-    /// Sucht die Konten neu; ändert `providers` nur, wenn sich wirklich etwas geändert hat.
+    convenience init(providers: [any UsageProvider], settings: AppSettings) {
+        self.init(entries: providers.map { AccountEntry(provider: $0, status: .ok) }, settings: settings)
+    }
+
+    /// Konten ohne doppelte Anmeldungen, auch ausgeblendete und nicht installierte.
+    var providers: [any UsageProvider] {
+        entries.filter { !$0.isDuplicate }.map(\.provider)
+    }
+
+    /// Sucht die Konten neu; ändert `entries` nur, wenn sich wirklich etwas geändert hat.
     func reloadAccounts() {
         guard let discover, !isDemo else { return }
         lastDiscovery = .now
         let found = discover()
-        if found.map(\.id) != providers.map(\.id) || found.map(\.source) != providers.map(\.source) {
-            providers = found
+        if found.map(\.id) != entries.map(\.id) || found.map(\.provider.source) != entries.map(\.provider.source)
+            || found.map(\.status) != entries.map(\.status) {
+            entries = found
         }
     }
 
-    /// Sichtbare Konten: Quelle vorhanden und nicht ausgeblendet.
+    func status(of provider: any UsageProvider) -> AccountEntry.Status {
+        entries.first { $0.id == provider.id }?.status ?? .ok
+    }
+
+    // MARK: Bezeichnung und Ausblenden
+
+    func isHidden(_ id: String) -> Bool {
+        isDemo ? demoHidden.contains(id) : settings.hiddenAccounts.contains(id)
+    }
+
+    func setHidden(_ id: String, _ hidden: Bool) {
+        if isDemo {
+            if hidden { demoHidden.insert(id) } else { demoHidden.remove(id) }
+        } else {
+            if hidden { settings.hiddenAccounts.insert(id) } else { settings.hiddenAccounts.remove(id) }
+        }
+    }
+
+    /// Eigene Bezeichnung, wie gespeichert.
+    func customLabel(_ id: String) -> String? {
+        isDemo ? demoLabels[id] : settings.accountLabels[id]
+    }
+
+    /// Speichert die Bezeichnung, höchstens 24 Zeichen; leer = automatische Bezeichnung.
+    func setLabel(_ id: String, _ text: String) {
+        let trimmed = String(text.trimmingCharacters(in: .whitespaces).prefix(AccountSource.maxLabelLength))
+        let value: String? = trimmed.isEmpty ? nil : trimmed
+        if isDemo { demoLabels[id] = value } else { settings.accountLabels[id] = value }
+    }
+
+    // MARK: Sichtbare Konten
+
+    /// Im Popover sichtbar: nicht ausgeblendet, nicht doppelt und entweder installiert oder
+    /// mit einem Fehler, den man sehen soll (Ordner fehlt, keine Anmeldung). Ein fehlender
+    /// Ordner verschwindet nie still.
+    var visibleProviders: [any UsageProvider] {
+        entries.filter { entry in
+            guard !entry.isDuplicate, !isHidden(entry.id) else { return false }
+            return entry.status == .ok ? entry.provider.isInstalled() : true
+        }.map(\.provider)
+    }
+
+    /// Abgefragt werden nur sichtbare Konten, deren Quelle da ist.
     var installedProviders: [any UsageProvider] {
-        providers.filter { $0.isInstalled() && !settings.hiddenAccounts.contains($0.id) }
+        visibleProviders.filter { status(of: $0) != .missingFolder && $0.isInstalled() }
+    }
+
+    /// Satz, warum ein Konto nicht abgefragt werden kann – für Popover und Widgets.
+    func problem(for provider: any UsageProvider) -> String? {
+        let folder = provider.source.folderDisplay ?? provider.source.folder?.path ?? ""
+        switch status(of: provider) {
+        case .missingFolder:
+            return "Ordner nicht gefunden: \(folder). Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder."
+        case .notSignedIn where !provider.isInstalled():
+            let kind = AccountDiscovery.FolderKind(rawValue: provider.kind) ?? .claude
+            return "Keine Anmeldung in diesem Ordner. Im Terminal »\(kind.signInCommand(folder: folder))« starten."
+        default:
+            return nil
+        }
+    }
+
+    /// Hinweis in den Einstellungen bei fehlendem Ordner, je nach Zustand (Designer-Prüfung
+    /// PR #5, Runden 11 und 12). Gleiche Sätze wie `AccountEntry.MissingFolderHint` unter Windows.
+    nonisolated static func missingFolderHint(hidden: Bool) -> String {
+        // Ausgeblendet steht schon darüber – „ausgeblendet“ nicht doppelt (Runde 12, c).
+        hidden
+            ? "Ordner nicht gefunden."
+            : "Ordner nicht gefunden. Das Konto steht grau im Menü. Ist das Laufwerk eingehängt, wird es wieder abgefragt."
+    }
+
+    /// Haken der Checkbox „Anzeigen“: Fehlt der Ordner, bleibt sie leer (Sven, Antwort zu PR #5),
+    /// sonst angehakt, solange das Konto nicht ausgeblendet ist.
+    func showsAsChecked(_ provider: any UsageProvider) -> Bool {
+        status(of: provider) != .missingFolder && !isHidden(provider.id)
+    }
+
+    /// Konto mit Fehler und ohne Stand: grau mit „!“ in der Kontoleiste.
+    func hasProblem(_ provider: any UsageProvider) -> Bool {
+        if problem(for: provider) != nil { return true }
+        let state = states[provider.id]
+        return state?.snapshot == nil && state?.error != nil
     }
 
     /// Alphabetisch nach Anbieter, darin Standardkonto zuerst, dann nach Bezeichnung –
     /// damit die Tabs nicht springen (SPEC §3.2).
     var sortedProviders: [any UsageProvider] {
-        installedProviders.sorted { a, b in
+        visibleProviders.sorted { a, b in
             if a.displayName != b.displayName {
                 return a.displayName.localizedStandardCompare(b.displayName) == .orderedAscending
             }
@@ -82,7 +174,7 @@ final class UsageStore {
 
     /// Bezeichnung des Kontos: eigene, sonst automatisch (E-Mail, Name, Ordner).
     func label(for provider: any UsageProvider) -> String? {
-        if let own = settings.accountLabels[provider.id]?.trimmingCharacters(in: .whitespaces), !own.isEmpty {
+        if let own = customLabel(provider.id)?.trimmingCharacters(in: .whitespaces), !own.isEmpty {
             return own
         }
         if let label = provider.source.automaticLabel { return label }
@@ -210,12 +302,20 @@ final class UsageStore {
     }
 
     #if DEBUG
-    /// Nur für `make screenshots`: fester Stand, ohne Abruf und ohne den Cache zu überschreiben.
-    func showDemo(_ snapshots: [String: ProviderSnapshot], providers demoProviders: [any UsageProvider]? = nil) {
-        // Nie echte Konten in Screenshots: nur die Standardkonten, ohne Erkennung.
-        providers = demoProviders ?? [ClaudeProvider(), CodexProvider(), AntigravityProvider(), OllamaProvider()]
+    /// Nur für `make screenshots` und `TOKENSTATS_DEMO_ACCOUNTS`: fester Stand, ohne Abruf,
+    /// ohne Erkennung und ohne den Cache zu überschreiben. Nie echte Konten.
+    func showDemo(_ snapshots: [String: ProviderSnapshot], entries demoEntries: [AccountEntry]? = nil,
+                  errors: [String: String] = [:], hidden: Set<String> = [], labels: [String: String] = [:],
+                  retryAt: [String: Date] = [:]) {
+        let standard: [any UsageProvider] = [ClaudeProvider(), CodexProvider(), AntigravityProvider(), OllamaProvider()]
+        entries = demoEntries ?? standard.map { AccountEntry(provider: $0, status: .ok) }
         isDemo = true
+        demoHidden = hidden
+        demoLabels = labels
         states = snapshots.mapValues { ProviderState(snapshot: $0) }
+        for (id, error) in errors { states[id, default: ProviderState()].error = error }
+        // Rate-Limit für Bilder („Abfrage pausiert …“), ohne Abfrage und ohne Cache
+        for (id, date) in retryAt { states[id, default: ProviderState()].retryAt = date }
     }
     #endif
 

@@ -35,6 +35,22 @@ public sealed class Palette
 
     public Brush SeverityBrush(Severity severity) => Solid(SeverityColor(severity, IsDark));
 
+    /// <summary>Textfarbe für Hinweissätze – nur für Text; Flächen, Balken, Prozente und Punkte nutzen <see cref="SeverityBrush"/>.</summary>
+    public Brush SeverityTextBrush(Severity severity) => Solid(SeverityTextColor(severity, IsDark));
+
+    /// <summary>
+    /// Wie <see cref="SeverityColor"/>, aber mit mindestens 4,5 : 1 auf getönten Hinweisflächen (wie macOS
+    /// <c>Severity.textColor</c>): Rot dunkel 0xF59A8A statt 0xE7705A (über #202020 4,3 → 6,2 : 1),
+    /// Rot hell 0x952F1A statt 0xC04329 (3,8 → über 5,5 : 1), Gelb 0x744F00 / 0xE8B24A statt 0xC1860F / 0xE0A838.
+    /// Hell mit Abstand, weil die Pixel kleiner Schrift durch die Kantenglättung heller ausfallen.
+    /// </summary>
+    public static int SeverityTextColor(Severity severity, bool dark) => severity switch
+    {
+        Severity.Crit => dark ? 0xF59A8A : 0x952F1A,
+        Severity.Warn => dark ? 0xE8B24A : 0x744F00,
+        _ => SeverityColor(severity, dark),
+    };
+
     public static int SeverityColor(Severity severity, bool dark) => severity switch
     {
         Severity.Ok => dark ? 0x4CBE83 : 0x2F8F5B,

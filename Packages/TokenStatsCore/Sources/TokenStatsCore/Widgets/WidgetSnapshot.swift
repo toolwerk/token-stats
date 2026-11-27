@@ -77,23 +77,46 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
     /// Installierte Anbieter, alphabetisch wie die Tabs.
     public var providers: [Provider]
     public var usage: [Usage]
+    /// Letzte bekannte Titel aller Konten, auch ausgeblendeter und entfernter, Konto-ID → Titel.
+    /// Damit nennt die Widget-Auswahl ein verschwundenes Konto beim Namen statt `claude@…`.
+    /// Optional: Dateien von vor den Konten bleiben lesbar.
+    public var accountNames: [String: String]?
 
-    public init(writtenAt: Date = .now, machine: String? = nil, showMoney: Bool, providers: [Provider], usage: [Usage]) {
+    public init(writtenAt: Date = .now, machine: String? = nil, showMoney: Bool, providers: [Provider], usage: [Usage],
+                accountNames: [String: String]? = nil) {
         version = Self.currentVersion
         self.writtenAt = writtenAt
         self.machine = machine
         self.showMoney = showMoney
         self.providers = providers
         self.usage = usage
+        self.accountNames = accountNames
     }
 
     // MARK: Abfragen
 
-    /// Das Konto mit dieser ID – oder, bei einer Anbieter-ID, das knappste Konto des Anbieters.
+    /// Das Konto mit dieser ID. Eine Anbieter-ID (`claude`) ist die des Standardkontos;
+    /// `claude@knappstes` ist das knappste Konto des Anbieters (`LimitsAccounts`).
+    /// Ist das Standardkonto ausgeblendet, weicht `claude` auf das knappste Konto des Anbieters
+    /// aus (Sven, Antwort auf die offenen Fragen zu PR #5). Fehlt ein weiteres Konto
+    /// (`claude@<hash>`, ausgeblendet oder Ordner weg), ist das Ergebnis `nil` – das Widget
+    /// nennt es dann beim Namen, statt still ein anderes zu zeigen.
     public func provider(_ id: String) -> Provider? {
         if let exact = providers.first(where: { $0.id == id }) { return exact }
-        let ofKind = providers.filter { $0.providerKind == id }
-        return ofKind.max { ($0.snapshot?.tightestWindow?.percent ?? -1) < ($1.snapshot?.tightestWindow?.percent ?? -1) }
+        let kind = LimitsAccounts.tightestKind(id) ?? (id.contains("@") ? nil : id)
+        guard let kind else { return nil }
+        return providers.filter { $0.providerKind == kind }.enumerated().max { a, b in
+            let pa = a.element.snapshot?.tightestWindow?.percent ?? -1, pb = b.element.snapshot?.tightestWindow?.percent ?? -1
+            return pa != pb ? pa < pb : a.offset > b.offset
+        }?.element
+    }
+
+    /// Zeigt `id` gerade ein anderes Konto als das gewählte – „knappstes Konto“ oder ein
+    /// ausgeblendetes Standardkonto, für das das knappste einspringt?
+    public func showsTightestInstead(of id: String) -> Bool {
+        if LimitsAccounts.tightestKind(id) != nil { return true }
+        return !id.contains("@") && id != LimitsAccounts.tightestID
+            && !providers.contains { $0.id == id } && provider(id) != nil
     }
 
     /// Anzeigename eines Anbieters ohne Konto, für den Verbrauch.

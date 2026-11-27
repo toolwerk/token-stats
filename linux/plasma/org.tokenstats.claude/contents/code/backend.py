@@ -8,6 +8,8 @@ Sources/TokenStats/Resources/pricing.json of the checkout).
 Several accounts (SPEC §6 „Mehrere Konten je Anbieter“): every CLAUDE_CONFIG_DIR is an account of its own —
 ~/.claude-* and ~/.claude_* with a .claude.json are found automatically, further folders come from
 TOKENSTATS_CLAUDE_DIRS (separated by ":"). Limits per account, usage over the logs of all accounts.
+A folder from CLAUDE_CONFIG_DIR or TOKENSTATS_CLAUDE_DIRS that does not exist stays in the list as
+"missingFolder" (grey with "!" in the account bar) and is never queried.
 """
 import glob, hashlib, json, os, re, sys, time, urllib.error, urllib.request
 from datetime import datetime, timedelta
@@ -21,6 +23,114 @@ LIMITS_CACHE = f"{CACHE_DIR}/limits.json"
 # „Aktualisieren“ oder nach einem Neustart. Der Stand liegt im Cache; main.qml fragt alle 305 s.
 MIN_INTERVAL_S = 300
 WINDOWS = {"session": 5 * 3600, "weekly_all": 7 * 86400, "weekly_scoped": 7 * 86400}
+
+# Zustand eines Kontoeintrags (Textkatalog „Mehrere Konten“, Abschnitt „Modell“)
+OK, MISSING_FOLDER = "ok", "missingFolder"
+# Wörtlich wie im macOS-Popover (UsageStore.problem(for:)), der Pfad steht im Satz
+MISSING_FOLDER_TEXT = ("Ordner nicht gefunden: {path}. "
+                       "Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.")
+# Ältere Cache-Einträge (vor dem Satz „Server antwortet mit HTTP nnn.“) enthalten nur „HTTP nnn“
+OLD_HTTP_ERROR_RE = re.compile(r"^HTTP (\d{3})$")
+MISSING_FOLDER_HINT = "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfernen, wenn es ihn nicht mehr gibt."
+NO_INFO = {"plan": "", "limits": [], "extra": None}
+
+
+# Befehle in Hinweisen stehen in »…« (ältere Cache-Einträge: `…`). Die Anzeige setzt jeden Befehl in Monospace
+# auf eigene Zeilen, umgebrochen mit wrap_command (QML: wrapCommand in util.js, dieselbe Regel).
+COMMAND_RE = re.compile(r"»([^«]*)«|`([^`]*)`")
+# leerer Zustand, direkt als Teile (Textkatalog „Mehrere Konten“, Abschnitt „Linux“)
+EMPTY_PARTS = [{"kind": "text", "text": "Melde dich mit"}, {"kind": "cmd", "text": "claude"},
+               {"kind": "text", "text": "an. Weitere Ordner:"},
+               {"kind": "cmd", "text": "TOKENSTATS_CLAUDE_DIRS=/pfad/eins:/pfad/zwei"}]
+
+
+def text_parts(text):
+    """Satz -> [{kind: "text"|"cmd", text}]; Befehle ohne »…«, leere Teile fallen weg."""
+    parts, pos = [], 0
+    text = text or ""
+
+    def add(kind, chunk):
+        chunk = chunk.strip()
+        if chunk:
+            parts.append({"kind": kind, "text": chunk})
+
+    for m in COMMAND_RE.finditer(text):
+        add("text", text[pos:m.start()])
+        add("cmd", m.group(1) if m.group(1) is not None else m.group(2))
+        pos = m.end()
+    add("text", text[pos:])
+    return parts
+
+
+# Zeichen, nach denen ein Befehl umbrechen darf, wenn kein Leerzeichen passt, in dieser Rangfolge (das Zeichen
+# bleibt am Zeilenende). So wandert ein Pfadstück ganz in die nächste Zeile, wenn es dort passt.
+COMMAND_BREAK_RANKS = ("=", "/", "-_.:")
+
+
+def _command_break(text, limit):
+    """Länge der Zeile bei einem Bruch nach einem Zeichen aus COMMAND_BREAK_RANKS (der höchste Rang gewinnt,
+    darin der letzte passende), sonst limit (harter Bruch). Ein „.“, mit dem ein Ordnername beginnt (am
+    Tokenanfang oder direkt nach „/“, „=“, „~“), ist kein Bruchpunkt."""
+    for chars in COMMAND_BREAK_RANKS:
+        for i in range(min(limit, len(text)) - 1, -1, -1):
+            c = text[i]
+            if c in chars and not (c == "." and (i == 0 or text[i - 1] in "/=~ ")):
+                return i + 1
+    return limit
+
+
+# Kurze Befehle ohne Leerzeichen (»claude«) stehen im Satz statt allein auf einer Zeile („Melde dich mit claude an.“)
+INLINE_COMMAND_MAX = 16
+
+
+def inline_parts(parts, max_chars=INLINE_COMMAND_MAX):
+    """Teile -> Teile für die Anzeige: Text-Teile und kurze Befehle (ohne Leerzeichen, höchstens max_chars Zeichen)
+    werden zu einem Text-Teil mit „segments“ [{text, mono}] zusammengefasst (mit Leerzeichen verbunden; „text“
+    ist der ganze Satz ohne Auszeichnung). Längere Befehle bleiben eigene Teile (kind „cmd“, wrap_command)."""
+    out = []
+    for part in parts:
+        short = (part["kind"] == "cmd" and len(part["text"]) <= max_chars
+                 and not any(c.isspace() for c in part["text"]))
+        if part["kind"] != "text" and not short:
+            out.append(dict(part))
+            continue
+        segment = {"text": part["text"], "mono": part["kind"] == "cmd"}
+        if out and out[-1]["kind"] == "text":
+            out[-1]["segments"].append(segment)
+            out[-1]["text"] += " " + part["text"]
+        else:
+            out.append({"kind": "text", "text": part["text"], "segments": [segment]})
+    return out
+
+
+def wrap_command(command, max_chars, indent=2):
+    """Monospace-Befehl -> Zeilen mit höchstens max_chars Zeichen, Folgezeilen um indent Leerzeichen eingerückt
+    (die Einrückung zählt mit). Bruch am letzten passenden Leerzeichen, sonst nach dem letzten „=“, sonst nach
+    dem letzten „/“, sonst nach „- _ . :“ (siehe _command_break), sonst hart nach max_chars Zeichen; führende
+    Leerzeichen einer Folgezeile entfallen. Nichts geht verloren."""
+    text = " ".join(str(command).split())
+    max_chars = max(1, int(max_chars))
+    indent = max(0, min(indent, max_chars - 1))
+    lines, first = [], True
+    while text:
+        limit = max_chars if first else max_chars - indent
+        if len(text) <= limit:
+            line, text = text, ""
+        else:
+            cut = text.rfind(" ", 0, limit + 1)
+            if cut > 0:
+                line, text = text[:cut], text[cut + 1:]
+            else:
+                cut = _command_break(text, limit)
+                line, text = text[:cut], text[cut:]
+        lines.append(line if first else " " * indent + line)
+        text, first = text.lstrip(" "), False
+    return lines
+
+
+def decimal(x, places=2):
+    """Zahl mit deutschem Komma und Punkt als Tausendertrenner: 1234.5 -> „1.234,50“."""
+    return f"{x:,.{places}f}".translate(str.maketrans(",.", ".,"))
 
 
 def plan_label(c):
@@ -41,32 +151,40 @@ def short_path(path):
 
 def read_account(path):
     try:
-        account = json.load(open(path)).get("oauthAccount")
+        with open(path) as f:
+            account = json.load(f).get("oauthAccount")
     except (OSError, ValueError, AttributeError):
         return {}
     return account if isinstance(account, dict) else {}
 
 
 def discover_accounts():
-    """-> [{id, folder, dir, label}]: Standardkonto ~/.claude, dann ~/.claude-*/~/.claude_* mit .claude.json,
-    CLAUDE_CONFIG_DIR und TOKENSTATS_CLAUDE_DIRS. Derselbe Ordner und dieselbe Anmeldung (accountUuid) nur einmal."""
+    """-> [{id, folder, dir, label, source, state}] in der Reihenfolge Standard, automatisch gefunden, von Hand.
+
+    Standard: ~/.claude, nur wenn der Ordner da ist. Automatisch: ~/.claude-*/~/.claude_* mit .claude.json.
+    Von Hand: CLAUDE_CONFIG_DIR und TOKENSTATS_CLAUDE_DIRS; fehlt so ein Ordner, bleibt das Konto mit
+    Zustand „missingFolder“ in der Liste und wird nicht abgefragt. Derselbe Ordner (auch per Symlink) und
+    dieselbe Anmeldung (accountUuid) zählen nur einmal, es gilt der zuerst gefundene Eintrag."""
     try:
         names = sorted(n for n in os.listdir(HOME) if n.startswith((".claude-", ".claude_")))
     except OSError:
         names = []
-    folders = [None] + [f"{HOME}/{n}" for n in names
-                        if os.path.isdir(f"{HOME}/{n}") and os.path.isfile(f"{HOME}/{n}/.claude.json")]
+    candidates = [(None, "default")] + [(f"{HOME}/{n}", "auto") for n in names
+                                        if os.path.isdir(f"{HOME}/{n}") and os.path.isfile(f"{HOME}/{n}/.claude.json")]
     for extra in [os.environ.get("CLAUDE_CONFIG_DIR", "")] + os.environ.get(CLAUDE_DIRS_ENV, "").split(":"):
         if extra:
-            folders.append(os.path.abspath(os.path.expanduser(extra)).rstrip("/"))
+            candidates.append((os.path.abspath(os.path.expanduser(extra)).rstrip("/"), "manual"))
     accounts, real_seen, uuid_seen = [], set(), set()
-    for folder in folders:
+    for folder, source in candidates:
         path = folder or f"{HOME}/.claude"
+        exists = os.path.isdir(path)
+        if not exists and source != "manual":
+            continue   # Standardkonto ohne ~/.claude: noch nie angemeldet, also kein Konto
         real = os.path.realpath(path)
-        if real in real_seen or (folder and not os.path.isdir(path)):
+        if real in real_seen:
             continue
         real_seen.add(real)
-        account = read_account(f"{folder}/.claude.json" if folder else f"{HOME}/.claude.json")
+        account = read_account(f"{folder}/.claude.json" if folder else f"{HOME}/.claude.json") if exists else {}
         uuid = account.get("accountUuid")
         if uuid in uuid_seen:
             continue   # zweimal dieselbe Anmeldung: sonst doppelte Abfragen gegen dasselbe Rate-Limit
@@ -75,14 +193,51 @@ def discover_accounts():
         email, name = account.get("emailAddress") or "", account.get("displayName") or ""
         label = email.split("@")[0] or name or (os.path.basename(folder).lstrip(".") if folder else "Standard")
         accounts.append({"id": f"claude@{folder_hash(folder)}" if folder else "claude",
-                         "folder": folder, "dir": path, "label": label})
+                         "folder": folder, "dir": path, "label": label, "source": source,
+                         "state": OK if exists else MISSING_FOLDER})
     return accounts
 
 
+def worst_pct(info):
+    """Höchster Prozentwert eines Stands, None ohne Stand oder ohne Limits."""
+    return max((l["pct"] for l in (info or {}).get("limits") or []), default=None)
+
+
+def tightest_id(accounts):
+    """[{id, info}] -> ID des knappsten Kontos (höchstes Limit, bei Gleichstand das frühere);
+    hat keins einen Stand, das erste; ohne Konten None."""
+    best, best_pct = None, None
+    for account in accounts:
+        pct = worst_pct(account.get("info"))
+        if pct is not None and (best_pct is None or pct > best_pct):
+            best, best_pct = account["id"], pct
+    return best or (accounts[0]["id"] if accounts else None)
+
+
+def error_sentence(error):
+    """Fehlertext für die Anzeige: ein alter Cache-Text „HTTP 503“ wird zum Satz wie auf macOS."""
+    match = OLD_HTTP_ERROR_RE.match(error or "")
+    return f"Server antwortet mit HTTP {match.group(1)}." if match else error
+
+
+def account_view(account, info, error, count):
+    """Eintrag für die Anzeige. problem = grau mit „!“: Ordner fehlt, oder Abruffehler ohne Stand."""
+    missing = account["state"] == MISSING_FOLDER
+    error = error_sentence(error)
+    return {"id": account["id"], "label": account["label"], "state": account["state"],
+            "title": f"Claude · {account['label']}" if count > 1 else "Claude",
+            "folder": short_path(account["dir"]) if account["folder"] else None,
+            "info": info, "error": error, "errorParts": inline_parts(text_parts(error)), "pct": worst_pct(info),
+            "problem": missing or (not info and bool(error)),
+            "missing": MISSING_FOLDER_TEXT.format(path=short_path(account["dir"])) if missing else None,
+            "missingHint": MISSING_FOLDER_HINT if missing else None}
+
+
 def claude_command(account, args=""):
-    """Befehl für Hinweise: beim zweiten Konto mit Ordner, ein schlichtes `claude` erneuert nur das Standardkonto."""
+    """Befehl für Hinweise, in »…« (text_parts macht daraus eine eigene Zeile): beim zweiten Konto mit Ordner,
+    ein schlichtes »claude« erneuert nur das Standardkonto."""
     prefix = f"CLAUDE_CONFIG_DIR={short_path(account['folder'])} " if account["folder"] else ""
-    return f"`{prefix}claude{args}`"
+    return f"»{prefix}claude{args}«"
 
 
 def load_creds(account):
@@ -111,14 +266,15 @@ def fetch_limits(c):
     if extra.get("is_enabled"):
         div = 10 ** extra.get("decimal_places", 2)
         cur = {"EUR": "€", "USD": "$"}.get(extra.get("currency"), extra.get("currency", ""))
-        extra_txt = f"Extra {extra['used_credits'] / div:,.2f} {cur} / {extra['monthly_limit'] / div:,.2f} {cur}"
+        extra_txt = f"Extra {decimal(extra['used_credits'] / div)} {cur} / {decimal(extra['monthly_limit'] / div)} {cur}"
     return {"plan": plan_label(c), "limits": rows, "extra": extra_txt}
 
 
 def load_prices():
     for path in (f"{HERE}/pricing.json", f"{HERE}/../../../../../Sources/TokenStats/Resources/pricing.json"):
         try:
-            d = json.load(open(path))
+            with open(path) as f:
+                d = json.load(f)
             return d["models"], d["asOf"]
         except (OSError, ValueError, KeyError):
             pass
@@ -212,7 +368,8 @@ def collect_usage(accounts, days=31):
 def read_cache():
     """-> {"accounts": {id: {info, attemptedAt, retryAt, error}}}"""
     try:
-        d = json.load(open(LIMITS_CACHE))
+        with open(LIMITS_CACHE) as f:
+            d = json.load(f)
     except (OSError, ValueError):
         return {"accounts": {}}
     if not isinstance(d, dict):
@@ -247,6 +404,8 @@ def save_entry(account, entry):
 
 def limits_with_cache(account):
     """-> (Stand, Fehlertext) eines Kontos. Fragt nur ab, wenn dessen letzte Abfrage lang genug her ist."""
+    if account.get("state") == MISSING_FOLDER:
+        return None, None   # Ordner fehlt: nicht abfragen, die Seite erklärt es
     now = time.time()
     entry = read_cache()["accounts"].get(account["id"]) or {}
     info = entry.get("info")
@@ -279,7 +438,7 @@ def limits_with_cache(account):
             entry["retryAt"] = now + min(max(wait, MIN_INTERVAL_S), 86400)
             entry["error"] = f"Abfrage pausiert (Rate-Limit) · wieder ab {hhmm(entry['retryAt'])}"
         else:
-            entry["error"] = f"Anmeldung abgelaufen: {claude_command(account)} starten" if e.code == 401 else f"HTTP {e.code}"
+            entry["error"] = f"Anmeldung abgelaufen: {claude_command(account)} starten" if e.code == 401 else f"Server antwortet mit HTTP {e.code}."
     except Exception as e:
         entry["error"] = f"Offline ({type(e).__name__})"
     save_entry(account, entry)
@@ -287,16 +446,21 @@ def limits_with_cache(account):
 
 
 def main():
-    """Ein Eintrag je Konto unter „accounts“; „title“ ist „Claude“ oder bei mehreren Konten „Claude · frank“."""
-    result = {"error": None, "priceDate": PRICES_AS_OF, "accounts": []}
+    """Ein Eintrag je Konto unter „accounts“ (Felder aus account_view plus Stand), „tightest“ = ID des
+    knappsten Kontos (beim Öffnen gewählt), „usageAccounts“ = Zahl der Konten, deren Protokolle zählen,
+    „emptyParts“ = Text des leeren Zustands als Satzteile und Befehle (inline_parts)."""
+    result = {"error": None, "priceDate": PRICES_AS_OF, "accounts": [], "tightest": None, "usageAccounts": 0,
+              "emptyParts": inline_parts(EMPTY_PARTS)}
     accounts = discover_accounts()
-    for account in accounts:
-        info, error = limits_with_cache(account)
-        title = f"Claude · {account['label']}" if len(accounts) > 1 else "Claude"
-        result["accounts"].append({"id": account["id"], "label": account["label"], "title": title, "error": error,
-                                   **(info or {"plan": "", "limits": [], "extra": None})})
+    views = [account_view(account, *limits_with_cache(account), len(accounts)) for account in accounts]
+    result["tightest"] = tightest_id(views)
+    for view in views:
+        info = view.pop("info")
+        result["accounts"].append({**view, **(info or NO_INFO)})
+    usable = [account for account in accounts if account["state"] == OK]
+    result["usageAccounts"] = len(usable)
     try:
-        result["usage"] = collect_usage(accounts)
+        result["usage"] = collect_usage(usable)
     except Exception as e:
         result["usage"] = []
         result["error"] = f"Verbrauch: {type(e).__name__}"

@@ -27,9 +27,24 @@ struct Screenshots {
         }
     }
 
+    /// Demo-Konten statt der Standardkonten: `TOKENSTATS_DEMO_ACCOUNTS=1` (bzw. `one`, `multi`,
+    /// `many`, `empty`, `invalid` – die Zustände des Designer-Entwurfs).
+    static var accountScenario: DemoAccounts.Scenario? {
+        DemoAccounts.Scenario(environment: ProcessInfo.processInfo.environment["TOKENSTATS_DEMO_ACCOUNTS"])
+    }
+
     /// Demo-Werte für Limits und Verbrauch; nichts wird abgefragt oder aus den Logs gelesen.
     func showDemo(now: Date = .now) {
-        store.showDemo(Self.demoSnapshots(now: now))
+        if let scenario = Self.accountScenario {
+            let demo = DemoAccountProvider.scenario(scenario, now: now)
+            // TOKENSTATS_DEMO_HIDDEN=<id,id> blendet für Bilder weitere Demo-Konten aus.
+            let extraHidden = (ProcessInfo.processInfo.environment["TOKENSTATS_DEMO_HIDDEN"] ?? "")
+                .split(separator: ",").map(String.init)
+            store.showDemo(demo.snapshots, entries: demo.entries, errors: demo.errors,
+                           hidden: demo.hidden.union(extraHidden), labels: demo.labels)
+        } else {
+            store.showDemo(Self.demoSnapshots(now: now))
+        }
         consumption.showDemo(
             Self.demoUsage(now: now, billingDay: settings.billingDay, prices: consumption.prices),
             rtk: DemoData.rtk(now: now, billingDay: settings.billingDay)
@@ -47,6 +62,13 @@ struct Screenshots {
             try await render(card(popover(selected: "antigravity")), appearance, to: file("limits-antigravity"))
             try await render(card(popover(selected: "ollama")), appearance, to: file("limits-ollama"))
             try await render(card(popover(selected: "claude", usage: true)), appearance, to: file("usage"))
+            if let scenario = Self.accountScenario {
+                // Mehrere Konten: Kontoleiste unter den Anbieter-Tabs (nur Demo-Konten).
+                let selected = store.sortedProviders.first { $0.kind == "claude" && !$0.isDefaultAccount }?.id ?? "claude"
+                try await render(card(popover(selected: selected)), appearance, to: file("limits-konten-\(scenario.rawValue)"))
+                // Ohne Vorauswahl, wie beim Öffnen: das knappste Konto ist gewählt.
+                try await render(card(popover(selected: nil)), appearance, to: file("limits-konten-\(scenario.rawValue)-offen"))
+            }
             try await render(menuBar, appearance, to: file("menubar"))
             try await render(widgets, appearance, to: file("widgets"))
         }
@@ -54,7 +76,7 @@ struct Screenshots {
 
     // MARK: Inhalte
 
-    private func popover(selected: String, usage: Bool = false) -> some View {
+    private func popover(selected: String?, usage: Bool = false) -> some View {
         PopoverView(
             store: store, consumption: consumption, settings: settings,
             selectedID: selected, showUsage: usage

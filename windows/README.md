@@ -41,6 +41,16 @@ das App-Symbol `TokenStats.ico`, das danach nach `TokenStats\` gehört):
 $env:TOKENSTATS_SCREENSHOTS = "$PWD\screenshots"; dotnet run --project TokenStats
 ```
 
+Dazu kommen Bilder mit mehreren Konten (SPEC §6), nur mit erfundenen Konten aus
+`DemoAccounts` – nie echte Kontoerkennung, Namen, Adressen oder Ordner: im Popup
+`limits-konten-mehrere` (ohne Vorauswahl), `limits-konto-ordner-fehlt`,
+`limits-konto-ordner-fehlt-ausgeblendet`, `limits-konto-http-503`,
+`limits-konto-nicht-angemeldet`, in den Einstellungen `einstellungen-konten-mehrere`,
+`einstellungen-konto-ordner-fehlt` und `einstellungen-konto-ordner-fehlt-ausgeblendet`. Die
+Einstellungen werden dabei nicht gespeichert. Ohne Windows-Rechner: Workflow „Windows“ von Hand
+starten (`workflow_dispatch`), der Job `screenshots` hängt alle Bilder als Artefakt
+`windows-screenshots` an den Lauf.
+
 ## Was anders ist als auf macOS
 
 | Thema             | macOS                                                  | Windows                                                                                                         |

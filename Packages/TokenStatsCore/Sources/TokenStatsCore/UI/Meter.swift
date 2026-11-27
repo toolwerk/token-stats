@@ -35,25 +35,43 @@ public struct MeterRow: View {
                 .frame(height: 6)
             // Ollama nennt keine Reset-Zeiten – dann bleibt die Zeile weg statt leer.
             if window.resetsAt != nil || elapsed != nil {
-                let layout = stackDetails ? AnyLayout(VStackLayout(alignment: .leading, spacing: 1)) : AnyLayout(HStackLayout())
-                layout {
-                    if let resetsAt = window.resetsAt {
-                        Text("Reset \(Format.reset(resetsAt, now: now))").lineLimit(1).minimumScaleFactor(compact ? 0.75 : 1)
-                    }
-                    if !stackDetails { Spacer(minLength: 6) }
-                    if let elapsed, let windowLength = window.windowLength {
-                        let onPace = abs(window.percent - elapsed) < Format.paceTolerance
-                        Text(Format.pace(percent: window.percent, elapsed: elapsed, windowLength: windowLength))
-                            .fontWeight(onPace ? .regular : .semibold)
-                            .foregroundStyle(onPace ? Color.secondary : window.severity.color)
-                            .lineLimit(1)
-                            .minimumScaleFactor(compact ? 0.75 : 1)
+                // Nebeneinander, wenn beides ganz passt, sonst untereinander – nie „…“
+                // (Designer-Prüfung PR #5: „33 Min. vorgegri…“ im mittleren Widget).
+                Group {
+                    if stackDetails {
+                        details(stacked: true)
+                    } else {
+                        ViewThatFits(in: .horizontal) {
+                            details(stacked: false)
+                            details(stacked: true)
+                        }
                     }
                 }
                 .font(.system(size: compact ? 10 : 11))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func details(stacked: Bool) -> some View {
+        let elapsed = window.elapsedFraction(now: now)
+        let layout = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 1)) : AnyLayout(HStackLayout())
+        layout {
+            if let resetsAt = window.resetsAt {
+                // Einzeilig in fester Höhe (Widgets 12 pt, Entwurf §4.1) – sonst springt die Stufe zu früh.
+                Text("Reset \(Format.reset(resetsAt, now: now))").lineLimit(1).fixedSize()
+                    .frame(height: compact ? 12 : nil)
+            }
+            if !stacked { Spacer(minLength: 6) }
+            if let elapsed, let windowLength = window.windowLength {
+                let onPace = abs(window.percent - elapsed) < Format.paceTolerance
+                Text(Format.pace(percent: window.percent, elapsed: elapsed, windowLength: windowLength))
+                    .fontWeight(onPace ? .regular : .semibold)
+                    .foregroundStyle(onPace ? Color.secondary : window.severity.color)
+                    .fixedSize(horizontal: !stacked, vertical: true)
             }
         }
     }
@@ -65,11 +83,14 @@ public struct MeterBar: View {
     public let percent: Double
     public let elapsed: Double?
     public let color: Color
+    /// Höhe der Pace-Marke: 10 pt am 6-pt-Balken, 8 pt am 4-pt-Kurzbalken (Entwurf §4.2).
+    public var markHeight: CGFloat
 
-    public init(percent: Double, elapsed: Double?, color: Color) {
+    public init(percent: Double, elapsed: Double?, color: Color, markHeight: CGFloat = 10) {
         self.percent = percent
         self.elapsed = elapsed
         self.color = color
+        self.markHeight = markHeight
     }
 
     public var body: some View {
@@ -92,14 +113,19 @@ public struct MeterBar: View {
                             .offset(x: width * min(used, elapsed))
                     }
                 }
+                // Feste Höhe: Sonst wächst der Balken auf die Höhe der Pace-Marke (6-pt-Balken
+                // wurden 10 pt, 4-pt-Kurzbalken 8 pt; Designer-Prüfung PR #5, Runde 12).
+                .frame(height: geo.size.height)
                 .clipShape(Capsule())
                 if let elapsed {
+                    // Die Marke ragt mittig über den Balken hinaus, ohne ihn zu strecken.
                     Rectangle()
                         .fill(.primary.opacity(0.45))
-                        .frame(width: 2, height: 10)
+                        .frame(width: 2, height: markHeight)
                         .offset(x: width * elapsed - 1)
                 }
             }
+            .frame(width: width, height: geo.size.height, alignment: .leading)
         }
     }
 }

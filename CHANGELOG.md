@@ -3,6 +3,25 @@
 Jede Version hat einen Abschnitt `## X.Y.Z`. `make publish` übernimmt ihn als Text für
 das GitHub-Release und für den Update-Dialog in der App.
 
+## Unveröffentlicht
+
+- **Mehrere Konten je Anbieter:** Wer zwei Claude- oder Codex-Abos hat (etwa privat und
+  Firma), sieht jetzt beide. Token Stats findet Ordner wie `~/.claude-2` selbst, weitere fügst
+  du in den Einstellungen unter „Konten“ hinzu. Limits gelten je Konto, der Verbrauch wird je
+  Anbieter zusammengerechnet. Gilt für macOS, Windows und die Linux-Widgets.
+- **Popover:** Die Anbieter-Tabs bleiben, wie sie waren. Hat ein Anbieter mehrere Konten,
+  wählst du das Konto auf „Limits“ in einer Leiste darunter. Sie bricht bei vielen Konten um
+  und kürzt keine Namen. Ein Konto, dessen Ordner fehlt oder das nicht angemeldet ist, bleibt
+  grau mit „!“ sichtbar und sagt, was zu tun ist.
+- **Einstellungen „Konten“:** Konten stehen in Gruppen je Anbieter, mit Herkunft, E-Mail und
+  Ordner. Die Bezeichnung änderst du über den Stift, höchstens 24 Zeichen. Fehlt ein von Hand
+  hinzugefügter Ordner oder gehört er zum selben Konto wie ein anderer, sagt die Zeile das,
+  und du kannst ihn entfernen.
+- **Widget „Limits“:** Die Auswahl nennt jedes Konto beim Namen, dazu „Claude – knappstes
+  Konto“. Ein bestehendes Widget auf „Claude“ zeigt weiter das Standardkonto. Das große
+  Widget zeigt bei vielen Konten eine Zeile je Konto mit dem knappsten Limit; was nicht mehr
+  passt, fasst eine Zeile zusammen („+7 weitere Konten · höchstens 26 %“).
+
 ## 0.4.0
 
 - **Widgets für den Mac:** Zwei neue Widgets für Schreibtisch und Mitteilungszentrale zeigen
