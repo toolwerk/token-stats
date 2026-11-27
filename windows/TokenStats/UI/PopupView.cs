@@ -109,7 +109,7 @@ public sealed class PopupView
 
     /// <summary>
     /// Konto ohne Stand, das sich nicht abfragen lässt oder nur Fehler liefert: grau mit „!“ in der
-    /// Kontoleiste, auf der Seite ein Hinweis mit „Einstellungen öffnen“.
+    /// Kontoleiste, auf der Seite ein Hinweis (bei Einrichtungsfehlern mit „Einstellungen öffnen“).
     /// </summary>
     bool IsFaulty(AccountEntry entry)
     {
@@ -423,7 +423,8 @@ public sealed class PopupView
 
     /// <summary>
     /// Seite eines Kontos, das sich nicht abfragen lässt (fehlender Ordner, Codex ohne Anmeldung) oder
-    /// ohne Stand nur Fehler liefert: Hinweis und „Einstellungen öffnen“ statt leerer Balken.
+    /// ohne Stand nur Fehler liefert: Hinweis statt leerer Balken. „Einstellungen öffnen“ nur bei
+    /// Einrichtungsfehlern (<see cref="AccountEntry.NeedsSetup"/>) – bei Abruffehlern hilft es nicht.
     /// </summary>
     UIElement? AccountProblem(AccountEntry entry)
     {
@@ -456,6 +457,7 @@ public sealed class PopupView
         hint.Children.Add(icon);
         hint.Children.Add(label);
 
+        if (!entry.NeedsSetup) return hint;
         var button = FooterButton(Ui.Text("Einstellungen öffnen", 11.5, p.Primary, FontWeights.SemiBold), "Einstellungen öffnen", openSettings);
         if (button is FrameworkElement element) element.HorizontalAlignment = HorizontalAlignment.Left;
         return Ui.Column(12, hint, button);

@@ -210,7 +210,8 @@ public sealed class SettingsWindow : Window
             var show = new CheckBox
             {
                 Content = Wrapped(store.Label(provider) ?? provider.DisplayName),
-                IsChecked = !hidden,
+                // Fehlt der Ordner: leer und deaktiviert, ob ausgeblendet oder nicht.
+                IsChecked = entry.ShowsAsChecked(hidden),
                 IsEnabled = !missing,
                 ToolTip = "Anzeigen",
                 MinWidth = 0,

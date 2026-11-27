@@ -101,6 +101,10 @@ public sealed class AccountTests : IDisposable
         Assert.Equal(AccountStatus.MissingFolder, entry.Status);
         Assert.True(entry.IsListed);
         Assert.False(entry.CanFetch);
+        // Einrichtungsfehler: Popup bietet „Einstellungen öffnen“; der Haken bleibt leer, auch wenn nicht ausgeblendet.
+        Assert.True(entry.NeedsSetup);
+        Assert.False(entry.ShowsAsChecked(hidden: false));
+        Assert.False(entry.ShowsAsChecked(hidden: true));
 
         // Im Popup sichtbar (grau mit „!“), aber nicht abgefragt und nicht im Verbrauch.
         var store = new UsageStore([], new AppSettings(), cachePath: null, () => discovery.Accounts(AccountDiscovery.FolderKind.Claude));
@@ -111,8 +115,12 @@ public sealed class AccountTests : IDisposable
         // Ist das Laufwerk wieder da, ist es ein normales Konto.
         ClaudeFolder(Path.Combine("laufwerk", "claude-kunde"), "u-5", "kunde-a@example.com");
         store.ReloadAccounts();
-        Assert.Equal(AccountStatus.Ok, store.Entries.Single(e => e.Id == entry.Id).Status);
+        var back = store.Entries.Single(e => e.Id == entry.Id);
+        Assert.Equal(AccountStatus.Ok, back.Status);
         Assert.Contains(store.PolledProviders, p => p.Id == entry.Id);
+        Assert.False(back.NeedsSetup);
+        Assert.True(back.ShowsAsChecked(hidden: false));
+        Assert.False(back.ShowsAsChecked(hidden: true));
     }
 
     [Fact]
@@ -127,11 +135,15 @@ public sealed class AccountTests : IDisposable
         Assert.Equal(AccountStatus.NotSignedIn, codexEntry.Status);
         Assert.True(codexEntry.IsListed);
         Assert.False(codexEntry.CanFetch);   // ohne auth.json keine Abfrage
+        Assert.True(codexEntry.NeedsSetup);
+        Assert.True(codexEntry.ShowsAsChecked(hidden: false));
 
         // Claude ohne .claude.json wird trotzdem abgefragt: Die Anmeldung kann woanders liegen.
         var claudeEntry = Assert.Single(discovery.Accounts(AccountDiscovery.FolderKind.Claude), e => e.Source.Origin == AccountOrigin.Manual);
         Assert.Equal(AccountStatus.NotSignedIn, claudeEntry.Status);
         Assert.True(claudeEntry.CanFetch);
+        // Wird abgefragt: Ein Fehler beim Abruf ist kein Einrichtungsfehler, also kein „Einstellungen öffnen“.
+        Assert.False(claudeEntry.NeedsSetup);
 
         var store = new UsageStore([], new AppSettings(), cachePath: null,
             () => discovery.Accounts(AccountDiscovery.FolderKind.Codex).Concat(discovery.Accounts(AccountDiscovery.FolderKind.Claude)).ToList());

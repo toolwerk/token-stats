@@ -113,6 +113,15 @@ public sealed record AccountEntry(IUsageProvider Provider, AccountStatus Status 
 
     /// <summary>Kann abgefragt werden: nicht fehlend, nicht doppelt, Quelle vorhanden (Codex ohne <c>auth.json</c> nicht).</summary>
     public bool CanFetch => (Status is AccountStatus.Ok or AccountStatus.NotSignedIn) && Provider.IsInstalled();
+
+    /// <summary>
+    /// Einrichtungsfehler aus der Erkennung: Ordner fehlt, oder keine Anmeldung im Ordner und darum keine
+    /// Abfrage. Nur dann bietet das Popup „Einstellungen öffnen“ an – bei Abruffehlern nicht.
+    /// </summary>
+    public bool NeedsSetup => Status == AccountStatus.MissingFolder || (Status == AccountStatus.NotSignedIn && !CanFetch);
+
+    /// <summary>Haken in den Einstellungen: angezeigt und Ordner da. Fehlt der Ordner, bleibt das Kästchen leer.</summary>
+    public bool ShowsAsChecked(bool hidden) => Status != AccountStatus.MissingFolder && !hidden;
 }
 
 /// <summary>Stabile Kurzkennung eines Ordners: die ersten 8 Hex-Zeichen von SHA-256(Pfad) – wie auf dem Mac.</summary>
