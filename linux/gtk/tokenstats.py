@@ -706,7 +706,9 @@ class Popup(Gtk.Window):
         self.account_bar.set_min_children_per_line(1)
         self.account_bar.set_max_children_per_line(64)
         self.account_bar.set_row_spacing(6); self.account_bar.set_column_spacing(6)
-        self.account_bar.set_halign(Gtk.Align.START)
+        # Volle Breite (FILL), sonst bekommt die FlowBox nur die Breite eines Chips und stellt jeden in eine eigene
+        # Zeile; die Chips selbst bleiben links bündig (FlowBoxChild und Button mit START)
+        self.account_bar.set_halign(Gtk.Align.FILL)
         self.account_bar.set_no_show_all(True)   # Sichtbarkeit steuert render_tabs
         outer.pack_start(self.account_bar, False, False, 0)
         outer.pack_start(Gtk.Separator(), False, False, 0)
