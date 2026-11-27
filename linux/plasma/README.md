@@ -35,8 +35,11 @@ Every `CLAUDE_CONFIG_DIR` is an account of its own (SPEC §6 "Mehrere Konten je 
   folder name). The selected account is outlined in the accent colour; an account with a problem
   (folder missing, or a request error without earlier values) is grey with "!". Opening the popup
   selects the tightest account. The page heading reads "Claude · frank" (only "Claude" with a
-  single account) and may wrap; nothing is shortened. Hints name the folder, e.g.
-  `CLAUDE_CONFIG_DIR=~/.claude-2 claude` starten.
+  single account) and may wrap; nothing is shortened. Hints name the folder, e.g. "Nicht
+  angemeldet:" followed by `CLAUDE_CONFIG_DIR=~/.claude-2 claude` and "starten". A command in a
+  hint or in the empty state is shown on a line of its own in monospace and only wraps at spaces,
+  never inside a token (`/`, `-` and `_` would otherwise be break points); the backend's
+  `text_parts()` splits a hint into sentence parts and commands (`»…«`).
 - A folder from `TOKENSTATS_CLAUDE_DIRS` or `CLAUDE_CONFIG_DIR` that does not exist (an unmounted
   drive, say) stays in the account bar, grey with "!", and is never queried. Its page says
   "Ordner nicht gefunden: {pfad}. Ist das Laufwerk eingehängt, erscheint das Konto von selbst

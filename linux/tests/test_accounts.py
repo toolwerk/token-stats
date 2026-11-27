@@ -91,6 +91,15 @@ class Home:
             os.environ["CLAUDE_CONFIG_DIR"] = config_dir
 
 
+def sentence(parts):
+    """Teile wieder als Satz; Befehle außer dem letzten Teil in »…« wie im Katalog."""
+    out = []
+    for i, part in enumerate(parts):
+        quoted = part["kind"] == "cmd" and i < len(parts) - 1
+        out.append(f"»{part['text']}«" if quoted else part["text"])
+    return " ".join(out)
+
+
 def summary(accounts):
     return [(a["label"], a["source"], a["state"]) for a in accounts]
 
@@ -230,12 +239,21 @@ class ViewTest(unittest.TestCase):
                 self.assertEqual(module.MISSING_FOLDER_TEXT, MISSING_TEXT)
                 self.assertEqual(module.MISSING_FOLDER_HINT, MISSING_HINT)
         self.assertEqual(gtk.EMPTY_TITLE, EMPTY_TITLE)
-        self.assertEqual(gtk.EMPTY_TEXT, EMPTY_TEXT)
-        with open(os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "ui", "FullView.qml")) as f:
+        for name, module in MODULES.items():
+            with self.subTest(module=name):
+                # leerer Zustand direkt als Teile; als Satz gelesen ist es der Katalogtext
+                self.assertEqual(sentence(module.EMPTY_PARTS), EMPTY_TEXT)
+                self.assertEqual([p["kind"] for p in module.EMPTY_PARTS], ["text", "cmd", "text", "cmd"])
+        ui = os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "ui")
+        for qml_file in ("FullView.qml", "PartsText.qml"):
+            with open(os.path.join(ui, qml_file)) as f:
+                qml = f.read()
+            self.assertNotIn("Elide", qml.replace("Text.ElideNone", ""), qml_file)
+        with open(os.path.join(ui, "FullView.qml")) as f:
             qml = f.read()
         self.assertIn(f'"{EMPTY_TITLE}"', qml)
-        self.assertIn(f'"{EMPTY_TEXT}"', qml)
-        self.assertNotIn("Elide", qml.replace("Text.ElideNone", ""))
+        self.assertIn("view.info.emptyParts", qml)
+        self.assertNotIn("»", qml)   # Befehle kommen als Teile aus dem Backend, nie in »…« im Text
 
 
 class NoRequestTest(unittest.TestCase):
@@ -257,7 +275,48 @@ class NoRequestTest(unittest.TestCase):
                 account = module.discover_accounts()[0]
                 info, error = module.limits_with_cache(account)
                 self.assertIsNone(info)
-                self.assertEqual(error, "Nicht angemeldet: `CLAUDE_CONFIG_DIR=~/.claude-arbeit claude` starten")
+                self.assertEqual(error, "Nicht angemeldet: »CLAUDE_CONFIG_DIR=~/.claude-arbeit claude« starten")
+                self.assertEqual(module.text_parts(error), [
+                    {"kind": "text", "text": "Nicht angemeldet:"},
+                    {"kind": "cmd", "text": "CLAUDE_CONFIG_DIR=~/.claude-arbeit claude"},
+                    {"kind": "text", "text": "starten"}])
+
+
+class PartsTest(unittest.TestCase):
+    """text_parts: Satzteile und Befehle, damit die Anzeige Befehle nie innerhalb eines Tokens umbricht."""
+
+    def each(self):
+        for name, module in MODULES.items():
+            with self.subTest(module=name):
+                yield module
+
+    def test_split(self):
+        for module in self.each():
+            self.assertEqual(module.text_parts("Anmeldung abgelaufen: »claude« starten"), [
+                {"kind": "text", "text": "Anmeldung abgelaufen:"}, {"kind": "cmd", "text": "claude"},
+                {"kind": "text", "text": "starten"}])
+            parts = module.text_parts("Nicht angemeldet: »CLAUDE_CONFIG_DIR=~/konten/kunde-a claude auth login« ausführen")
+            self.assertEqual(parts[1], {"kind": "cmd", "text": "CLAUDE_CONFIG_DIR=~/konten/kunde-a claude auth login"})
+
+    def test_plain_and_empty(self):
+        for module in self.each():
+            self.assertEqual(module.text_parts("HTTP 500"), [{"kind": "text", "text": "HTTP 500"}])
+            self.assertEqual(module.text_parts("Offline (URLError)"), [{"kind": "text", "text": "Offline (URLError)"}])
+            self.assertEqual(module.text_parts(None), [])
+            self.assertEqual(module.text_parts(""), [])
+            self.assertEqual(module.text_parts("»claude«"), [{"kind": "cmd", "text": "claude"}])
+            self.assertEqual(module.text_parts("»  «"), [])
+
+    def test_old_cache_with_backticks(self):
+        for module in self.each():
+            self.assertEqual(module.text_parts("Nicht angemeldet: `claude` starten")[1], {"kind": "cmd", "text": "claude"})
+
+    def test_prefix_for_status_line(self):
+        parts = gtk.text_parts("Anmeldung abgelaufen: »claude« starten")
+        self.assertEqual(gtk.prefixed("Stand 12:00  ·  ⚠", parts)[0],
+                         {"kind": "text", "text": "Stand 12:00  ·  ⚠ Anmeldung abgelaufen:"})
+        self.assertEqual(gtk.prefixed("Stand 12:00  ·  ⚠", [{"kind": "cmd", "text": "claude"}]),
+                         [{"kind": "text", "text": "Stand 12:00  ·  ⚠"}, {"kind": "cmd", "text": "claude"}])
 
 
 class BackendOutputTest(unittest.TestCase):
@@ -292,11 +351,14 @@ class BackendOutputTest(unittest.TestCase):
         self.assertEqual(missing["missing"], MISSING_TEXT.format(path="~/usb/claude-arbeit"))
         self.assertEqual(result["accounts"][1]["pct"], 88)
         self.assertFalse(result["accounts"][1]["problem"])
+        self.assertEqual(result["accounts"][1]["errorParts"], [])
+        self.assertEqual(missing["errorParts"], [])   # Ordner fehlt: kein Abruf, also kein Fehlertext
 
     def test_output_empty(self):
         Home(self)
         result = self.run_main()
         self.assertEqual((result["accounts"], result["tightest"], result["usageAccounts"]), ([], None, 0))
+        self.assertEqual(result["emptyParts"], backend.EMPTY_PARTS)
 
 
 if __name__ == "__main__":

@@ -45,6 +45,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CLAUDE_DIRS_ENV = "TOKENSTATS_CLAUDE_DIRS"
 ICON_DIR = f"{HOME}/.cache/tokenstats"
 INTERVAL_S = 300
+WIDTH, HEIGHT = 400, 640   # Fenster fest 400 px breit, siehe Popup
 # Der Usage-Endpunkt ist hart rate-limitiert: höchstens eine Abfrage alle 300 s, auch bei Klick auf
 # „Aktualisieren“ oder nach einem Neustart. Der Stand liegt im Cache,
 # den sich diese Fassung mit dem Plasma-Widget teilt.
@@ -62,7 +63,33 @@ MISSING_FOLDER_TEXT = ("Ordner nicht gefunden: {path}. "
                        "Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.")
 MISSING_FOLDER_HINT = "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfernen, wenn es ihn nicht mehr gibt."
 EMPTY_TITLE = "Kein Claude-Konto gefunden"
-EMPTY_TEXT = "Melde dich mit »claude« an. Weitere Ordner: TOKENSTATS_CLAUDE_DIRS=/pfad/eins:/pfad/zwei"
+
+# Befehle in Hinweisen stehen in »…« (ältere Cache-Einträge: `…`). Die Anzeige setzt jeden Befehl in Monospace
+# auf eine eigene Zeile und bricht ihn nur an Leerzeichen um, nie innerhalb eines Tokens.
+COMMAND_RE = re.compile(r"»([^«]*)«|`([^`]*)`")
+# leerer Zustand, direkt als Teile (Textkatalog „Mehrere Konten“, Abschnitt „Linux“)
+EMPTY_PARTS = [{"kind": "text", "text": "Melde dich mit"}, {"kind": "cmd", "text": "claude"},
+               {"kind": "text", "text": "an. Weitere Ordner:"},
+               {"kind": "cmd", "text": "TOKENSTATS_CLAUDE_DIRS=/pfad/eins:/pfad/zwei"}]
+
+
+def text_parts(text):
+    """Satz -> [{kind: "text"|"cmd", text}]; Befehle ohne »…«, leere Teile fallen weg."""
+    parts, pos = [], 0
+    text = text or ""
+
+    def add(kind, chunk):
+        chunk = chunk.strip()
+        if chunk:
+            parts.append({"kind": kind, "text": chunk})
+
+    for m in COMMAND_RE.finditer(text):
+        add("text", text[pos:m.start()])
+        add("cmd", m.group(1) if m.group(1) is not None else m.group(2))
+        pos = m.end()
+    add("text", text[pos:])
+    return parts
+
 
 CSS = b"""
 window.ts { background: #1e1e1e; color: #e6e6e6; }
@@ -179,6 +206,13 @@ def account_view(account, info, note, count):
             "missingHint": MISSING_FOLDER_HINT if missing else None}
 
 
+def prefixed(prefix, parts):
+    """Stellt prefix vor die Teile; beginnen sie mit Text, auf derselben Zeile."""
+    if parts and parts[0]["kind"] == "text":
+        return [{"kind": "text", "text": f"{prefix} {parts[0]['text']}"}] + parts[1:]
+    return [{"kind": "text", "text": prefix}] + parts
+
+
 def pick_account(accounts, current_id):
     """Gewähltes Konto: das mit current_id, sonst das knappste, ohne Konten None."""
     by_id = {a["id"]: a for a in accounts}
@@ -186,9 +220,10 @@ def pick_account(accounts, current_id):
 
 
 def claude_command(account, args=""):
-    """Befehl für Hinweise: beim zweiten Konto mit Ordner, ein schlichtes `claude` erneuert nur das Standardkonto."""
+    """Befehl für Hinweise, in »…« (text_parts macht daraus eine eigene Zeile): beim zweiten Konto mit Ordner,
+    ein schlichtes »claude« erneuert nur das Standardkonto."""
     prefix = f"CLAUDE_CONFIG_DIR={short_path(account['folder'])} " if account["folder"] else ""
-    return f"`{prefix}claude{args}`"
+    return f"»{prefix}claude{args}«"
 
 
 def load_creds(account):
@@ -315,7 +350,8 @@ def _limits_with_cache(account):
 
 def load_prices():
     try:
-        d = json.load(open(f"{HERE}/../../Sources/TokenStats/Resources/pricing.json"))
+        with open(f"{HERE}/../../Sources/TokenStats/Resources/pricing.json") as f:
+            d = json.load(f)
         return d["models"], d["asOf"]
     except (OSError, ValueError, KeyError):
         return {}, None
@@ -517,6 +553,31 @@ def label(text, css=None, xalign=0, wrap=False):
     return l
 
 
+def command_row(command, css="ts-dim"):
+    """Befehl auf eigener Zeile in Monospace: ein nicht umbrechendes Label je Token, die FlowBox bricht nur
+    zwischen den Tokens um (also an Leerzeichen), nie an „/“, „-“ oder „_“."""
+    flow = Gtk.FlowBox(halign=Gtk.Align.START)
+    flow.set_selection_mode(Gtk.SelectionMode.NONE)
+    flow.set_homogeneous(False)
+    flow.set_min_children_per_line(1)
+    flow.set_max_children_per_line(64)
+    flow.set_column_spacing(7); flow.set_row_spacing(0)   # etwa die Breite eines Leerzeichens
+    for token in command.split():
+        child = Gtk.FlowBoxChild(can_focus=False)
+        child.add(label(token, f"{css} ts-mono"))
+        flow.add(child)
+    return flow
+
+
+def parts_box(parts, css="ts-dim"):
+    """Satzteile umbrechend, Befehle (kind „cmd“) je als eigene Zeile, siehe command_row."""
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    for part in parts:
+        widget = command_row(part["text"], css) if part["kind"] == "cmd" else label(part["text"], css, wrap=True)
+        box.pack_start(widget, False, False, 0)
+    return box
+
+
 def markup(l, color):
     l.set_markup(f'<span foreground="{color}">{GLib.markup_escape_text(l.get_text())}</span>')
     return l
@@ -531,7 +592,7 @@ class Popup(Gtk.Window):
         super().__init__(title="Token Stats")
         self.app = app
         self.get_style_context().add_class("ts")
-        self.set_default_size(400, 640)
+        self.set_default_size(WIDTH, HEIGHT)
         self.set_resizable(False)
         self.set_decorated(False)
         self.connect("delete-event", lambda *_: self.hide() or True)
@@ -545,7 +606,16 @@ class Popup(Gtk.Window):
             LayerShell.set_keyboard_mode(self, LayerShell.KeyboardMode.ON_DEMAND)
         self.page, self.range = "limits", "7d"
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.add(outer)
+        # Feste Breite 400: Der Inhalt liegt in einem ScrolledWindow ohne Scrollbalken (EXTERNAL), dessen
+        # Mindestbreite nicht vom Inhalt abhängt. Kontoleiste und Texte brechen bei 400 px um; was trotzdem
+        # nicht passt (ein sehr langes Token in einem Befehl), wird abgeschnitten, statt das Fenster zu verbreitern.
+        frame = Gtk.ScrolledWindow()
+        frame.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.EXTERNAL)
+        frame.set_size_request(WIDTH, HEIGHT)
+        viewport = Gtk.Viewport(); viewport.set_shadow_type(Gtk.ShadowType.NONE)
+        viewport.add(outer)
+        frame.add(viewport)
+        self.add(frame)
 
         head = Gtk.Box(spacing=8, margin=16)
         head.pack_start(label("Token Stats", "ts-title"), True, True, 0)
@@ -585,7 +655,7 @@ class Popup(Gtk.Window):
         outer.pack_start(sw, True, True, 0)
 
         foot = Gtk.Box(spacing=8); foot.get_style_context().add_class("ts-foot")
-        self.status = label("", "ts-dim", wrap=True)
+        self.status = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)   # Stand und Hinweis, siehe render()
         foot.pack_start(self.status, True, True, 0)
         rb = Gtk.Button(label="⟳"); rb.connect("clicked", lambda *_: app.refresh())
         foot.pack_end(rb, False, False, 0)
@@ -682,8 +752,13 @@ class Popup(Gtk.Window):
         self.render_tabs()
         account = a.account()
         warning = (account or {}).get("note") if self.page == "limits" else a.note
-        note = f"  ·  ⚠ {warning}" if warning else ""
-        self.status.set_text((f"Stand {a.updated:%H:%M}" if a.updated else "lädt …") + note)
+        stand = f"Stand {a.updated:%H:%M}" if a.updated else "lädt …"
+        for c in self.status.get_children():
+            c.destroy()
+        parts = text_parts(warning)
+        status = parts_box(prefixed(f"{stand}  ·  ⚠", parts) if parts else [{"kind": "text", "text": stand}])
+        status.show_all()
+        self.status.pack_start(status, False, False, 0)
         if a.updated and not a.accounts:
             self.render_empty()
         else:
@@ -692,7 +767,7 @@ class Popup(Gtk.Window):
 
     def render_empty(self):
         self.body.pack_start(label(EMPTY_TITLE, "ts-h", wrap=True), False, False, 0)
-        self.body.pack_start(label(EMPTY_TEXT, "ts-dim", wrap=True), False, False, 0)
+        self.body.pack_start(parts_box(EMPTY_PARTS), False, False, 0)
 
     def render_limits(self):
         account = self.app.account()
@@ -706,7 +781,7 @@ class Popup(Gtk.Window):
             text = account["note"] if account and account["note"] else "Lädt …"
             if account and len(self.app.accounts) > 1:
                 self.body.pack_start(label(account["title"], "ts-h", wrap=True), False, False, 0)
-            self.body.pack_start(label(text, "ts-dim", wrap=True), False, False, 0)
+            self.body.pack_start(parts_box(text_parts(text)), False, False, 0)
             return
         worst = max((r["pct"] for r in info["limits"]), default=0)
         h = Gtk.Box(spacing=8)

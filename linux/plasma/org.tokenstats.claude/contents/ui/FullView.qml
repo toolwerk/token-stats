@@ -160,14 +160,20 @@ ColumnLayout {
     RowLayout {
         Layout.fillWidth: true
         Layout.margins: Kirigami.Units.largeSpacing
-        PC3.Label {
+        // Stand und Hinweis; ein Befehl im Hinweis steht auf eigener Zeile (PartsText)
+        PartsText {
             Layout.fillWidth: true
-            wrapMode: Text.Wrap
             opacity: 0.7
-            text: (view.updated ? "Stand " + Qt.formatTime(view.updated, "hh:mm") : "lädt …")
-                  + (warning ? "  ·  ⚠ " + warning : "")
-            readonly property var warning: view.page === "limits" ? (view.acc ? view.acc.error : null)
-                                                                 : (view.info ? view.info.error : null)
+            parts: {
+                var stand = view.updated ? "Stand " + Qt.formatTime(view.updated, "hh:mm") : "lädt …"
+                var warning = view.page === "limits" ? (view.acc && view.acc.errorParts ? view.acc.errorParts : [])
+                            : (view.info && view.info.error ? [{ kind: "text", text: view.info.error }] : [])
+                if (!warning.length) return [{ kind: "text", text: stand }]
+                var prefix = stand + "  ·  ⚠"
+                if (warning[0].kind === "text")
+                    return [{ kind: "text", text: prefix + " " + warning[0].text }].concat(warning.slice(1))
+                return [{ kind: "text", text: prefix }].concat(warning)
+            }
         }
         PC3.ToolButton { icon.name: "view-refresh"; onClicked: view.refreshRequested() }
     }
@@ -185,10 +191,9 @@ ColumnLayout {
                 wrapMode: Text.Wrap
                 elide: Text.ElideNone
             }
-            PC3.Label {
-                text: "Melde dich mit »claude« an. Weitere Ordner: TOKENSTATS_CLAUDE_DIRS=/pfad/eins:/pfad/zwei"
+            PartsText {
+                parts: view.info.emptyParts || []
                 Layout.fillWidth: true
-                wrapMode: Text.Wrap
                 opacity: 0.7
             }
         }
@@ -247,12 +252,12 @@ ColumnLayout {
                     background: Rectangle { radius: height / 2; color: "transparent"; border.width: 1; border.color: view.tint(worst) }
                 }
             }
-            PC3.Label {
+            PartsText {
                 visible: view.acc.limits.length === 0
                 Layout.fillWidth: true
-                wrapMode: Text.WordWrap
                 opacity: 0.7
-                text: view.acc.error || "Noch kein Stand – fragt beim nächsten Takt ab."
+                parts: view.acc.errorParts && view.acc.errorParts.length ? view.acc.errorParts
+                     : [{ kind: "text", text: "Noch kein Stand – fragt beim nächsten Takt ab." }]
             }
             Repeater {
                 model: view.acc.limits

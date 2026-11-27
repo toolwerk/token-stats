@@ -32,6 +32,33 @@ MISSING_FOLDER_HINT = "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfern
 NO_INFO = {"plan": "", "limits": [], "extra": None}
 
 
+# Befehle in Hinweisen stehen in »…« (ältere Cache-Einträge: `…`). Die Anzeige setzt jeden Befehl in Monospace
+# auf eine eigene Zeile und bricht ihn nur an Leerzeichen um, nie innerhalb eines Tokens.
+COMMAND_RE = re.compile(r"»([^«]*)«|`([^`]*)`")
+# leerer Zustand, direkt als Teile (Textkatalog „Mehrere Konten“, Abschnitt „Linux“)
+EMPTY_PARTS = [{"kind": "text", "text": "Melde dich mit"}, {"kind": "cmd", "text": "claude"},
+               {"kind": "text", "text": "an. Weitere Ordner:"},
+               {"kind": "cmd", "text": "TOKENSTATS_CLAUDE_DIRS=/pfad/eins:/pfad/zwei"}]
+
+
+def text_parts(text):
+    """Satz -> [{kind: "text"|"cmd", text}]; Befehle ohne »…«, leere Teile fallen weg."""
+    parts, pos = [], 0
+    text = text or ""
+
+    def add(kind, chunk):
+        chunk = chunk.strip()
+        if chunk:
+            parts.append({"kind": kind, "text": chunk})
+
+    for m in COMMAND_RE.finditer(text):
+        add("text", text[pos:m.start()])
+        add("cmd", m.group(1) if m.group(1) is not None else m.group(2))
+        pos = m.end()
+    add("text", text[pos:])
+    return parts
+
+
 def plan_label(c):
     m = re.search(r"max_(\d+)x", c.get("rateLimitTier") or "")
     return f"{c.get('subscriptionType', '').title()}{f' {m.group(1)}×' if m else ''}"
@@ -119,16 +146,17 @@ def account_view(account, info, error, count):
     return {"id": account["id"], "label": account["label"], "state": account["state"],
             "title": f"Claude · {account['label']}" if count > 1 else "Claude",
             "folder": short_path(account["dir"]) if account["folder"] else None,
-            "info": info, "error": error, "pct": worst_pct(info),
+            "info": info, "error": error, "errorParts": text_parts(error), "pct": worst_pct(info),
             "problem": missing or (not info and bool(error)),
             "missing": MISSING_FOLDER_TEXT.format(path=short_path(account["dir"])) if missing else None,
             "missingHint": MISSING_FOLDER_HINT if missing else None}
 
 
 def claude_command(account, args=""):
-    """Befehl für Hinweise: beim zweiten Konto mit Ordner, ein schlichtes `claude` erneuert nur das Standardkonto."""
+    """Befehl für Hinweise, in »…« (text_parts macht daraus eine eigene Zeile): beim zweiten Konto mit Ordner,
+    ein schlichtes »claude« erneuert nur das Standardkonto."""
     prefix = f"CLAUDE_CONFIG_DIR={short_path(account['folder'])} " if account["folder"] else ""
-    return f"`{prefix}claude{args}`"
+    return f"»{prefix}claude{args}«"
 
 
 def load_creds(account):
@@ -164,7 +192,8 @@ def fetch_limits(c):
 def load_prices():
     for path in (f"{HERE}/pricing.json", f"{HERE}/../../../../../Sources/TokenStats/Resources/pricing.json"):
         try:
-            d = json.load(open(path))
+            with open(path) as f:
+                d = json.load(f)
             return d["models"], d["asOf"]
         except (OSError, ValueError, KeyError):
             pass
@@ -337,8 +366,10 @@ def limits_with_cache(account):
 
 def main():
     """Ein Eintrag je Konto unter „accounts“ (Felder aus account_view plus Stand), „tightest“ = ID des
-    knappsten Kontos (beim Öffnen gewählt), „usageAccounts“ = Zahl der Konten, deren Protokolle zählen."""
-    result = {"error": None, "priceDate": PRICES_AS_OF, "accounts": [], "tightest": None, "usageAccounts": 0}
+    knappsten Kontos (beim Öffnen gewählt), „usageAccounts“ = Zahl der Konten, deren Protokolle zählen,
+    „emptyParts“ = Text des leeren Zustands als Satzteile und Befehle (text_parts)."""
+    result = {"error": None, "priceDate": PRICES_AS_OF, "accounts": [], "tightest": None, "usageAccounts": 0,
+              "emptyParts": EMPTY_PARTS}
     accounts = discover_accounts()
     views = [account_view(account, *limits_with_cache(account), len(accounts)) for account in accounts]
     result["tightest"] = tightest_id(views)

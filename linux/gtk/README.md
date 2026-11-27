@@ -32,8 +32,11 @@ Every `CLAUDE_CONFIG_DIR` is an account of its own (SPEC §6 "Mehrere Konten je 
   folder name). The selected account is outlined in the accent colour; an account with a problem
   (folder missing, or a request error without earlier values) is grey with "!". Opening the popup
   selects the tightest account. The page heading reads "Claude · frank" (only "Claude" with a
-  single account) and may wrap; nothing is shortened. Hints name the folder, e.g.
-  `CLAUDE_CONFIG_DIR=~/.claude-2 claude` starten.
+  single account) and may wrap; nothing is shortened. Hints name the folder, e.g. "Nicht
+  angemeldet:" followed by `CLAUDE_CONFIG_DIR=~/.claude-2 claude` and "starten". A command in a
+  hint or in the empty state is shown on a line of its own in monospace and only wraps at spaces,
+  never inside a token (`/`, `-` and `_` would otherwise be break points); the backend's
+  `text_parts()` splits a hint into sentence parts and commands (`»…«`).
 - A folder from `TOKENSTATS_CLAUDE_DIRS` or `CLAUDE_CONFIG_DIR` that does not exist (an unmounted
   drive, say) stays in the account bar, grey with "!", and is never queried. Its page says
   "Ordner nicht gefunden: {pfad}. Ist das Laufwerk eingehängt, erscheint das Konto von selbst
@@ -69,6 +72,8 @@ Run it from a checkout, because it reads the price table from `Sources/`. For au
   window.
 - Plasma reports the icon position in physical pixels and sends every click twice. The script
   converts with the scale from `kscreen-doctor -j` and ignores calls within 400 ms.
+- The window is fixed at 400 × 640 px: the account bar and all texts wrap at 400 px, and the window
+  never grows wider (a single command token longer than a line is clipped instead).
 - Refreshes every 5 minutes, and never more often than every 300 s: the refresh button and a restart use the cache (`~/.cache/tokenstats/limits.json`, shared with the Plasma widget) while the last request is younger. On HTTP 429 the last values stay and the note shows when the next request is allowed (`Retry-After`).
 
 The data part of `tokenstats.py` imports without GTK, so the account logic is tested together with
