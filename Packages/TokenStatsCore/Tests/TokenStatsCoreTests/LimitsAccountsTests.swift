@@ -49,11 +49,16 @@ import Testing
         accounts[0].hidden = true // Standardkonto „Privat“ ausgeblendet
         accounts.remove(at: 2) // „Kunde A“ entfernt – Name ist dann nicht mehr bekannt
         var snapshot = DemoAccounts.widgetSnapshot(accounts, now: now)
-        #expect(snapshot.provider("claude") == nil, "kein stiller Wechsel auf ein anderes Konto")
+        // Sven (Antwort auf die offenen Fragen): Ist das Standardkonto ausgeblendet, weicht
+        // „claude“ auf das knappste Claude-Konto aus, statt nur einen Hinweis zu zeigen.
+        #expect(snapshot.provider("claude")?.id == "claude@a1b2c3d4", "knappstes verbleibendes Claude-Konto (Arbeit)")
+        #expect(snapshot.showsTightestInstead(of: "claude"), "Kopf sagt dann „knappstes Konto“")
+        #expect(!snapshot.showsTightestInstead(of: "claude@a1b2c3d4"))
 
         let hidden = LimitsAccounts.choice(for: "claude", in: snapshot)
         #expect(hidden.title == "Claude · Privat")
-        #expect(hidden.subtitle == "nicht mehr da")
+        #expect(hidden.subtitle == "ausgeblendet – zeigt knappstes Konto")
+        #expect(snapshot.provider("claude@e5f6a7b8") == nil, "ein entferntes weiteres Konto springt nicht still um")
 
         let removed = LimitsAccounts.choice(for: "claude@e5f6a7b8", in: snapshot)
         #expect(removed.title == "Claude · Konto")

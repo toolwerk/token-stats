@@ -99,9 +99,10 @@ import TokenStatsCore
 
         #expect(widget.provider("claude@knappstes")?.id == "claude@03abf0ee", "eigener Eintrag „knappstes Konto“")
 
-        // Variante B (Sven, 27.11.2026): „claude“ ist das Standardkonto. Fehlt es, kein stiller Wechsel.
+        // Variante B (Sven, 27.11.2026): „claude“ ist das Standardkonto. Ist es ausgeblendet,
+        // weicht das Widget auf das knappste Claude-Konto aus (Svens Antwort zu PR #5).
         let onlySecond = WidgetSnapshot(showMoney: true, providers: [widget.providers[1]], usage: [])
-        #expect(onlySecond.provider("claude") == nil)
+        #expect(onlySecond.provider("claude")?.id == "claude@03abf0ee")
         #expect(onlySecond.provider("claude@knappstes")?.id == "claude@03abf0ee")
     }
 
@@ -257,5 +258,29 @@ import TokenStatsCore
         let merged = KnownAccountNames.merge(stored: migrated, current: ["claude": "Claude · Privat"],
                                              now: now.addingTimeInterval(179 * 24 * 3600))
         #expect(merged["claude@e5f6a7b8"]?.name == "Claude · Kunde A")
+    }
+
+    // MARK: Svens Antworten zu PR #5
+
+    @MainActor @Test func missingFolderCheckboxStaysEmptyAndOnlySetupErrorsOfferSettings() throws {
+        let settings = AppSettings()
+        let previousHidden = settings.hiddenAccounts
+        defer { settings.hiddenAccounts = previousHidden }
+        settings.hiddenAccounts = []
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let gone = ClaudeProvider(configDirectory: home.appending(path: "fehlt"), origin: .manual)
+        let fine = try claudeFolder(home, ".claude-2", uuid: "u-2", email: "arbeit@example.com")
+        let ok = ClaudeProvider(configDirectory: fine, origin: .detected)
+        let store = UsageStore(entries: [
+            AccountEntry(provider: gone, status: .missingFolder),
+            AccountEntry(provider: ok, status: .ok),
+        ], settings: settings)
+        #expect(!store.showsAsChecked(gone), "Ordner fehlt: kein Haken")
+        #expect(store.showsAsChecked(ok))
+        settings.hiddenAccounts = [ok.id]
+        #expect(!store.showsAsChecked(ok), "ausgeblendet: kein Haken")
+        #expect(store.needsSetup(gone), "Einrichtungsfehler: „Einstellungen öffnen“")
+        #expect(!store.needsSetup(ok), "kein Einrichtungsfehler – auch ein Abruffehler zeigt keinen Knopf")
     }
 }

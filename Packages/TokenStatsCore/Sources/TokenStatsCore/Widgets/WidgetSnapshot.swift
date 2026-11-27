@@ -96,15 +96,27 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
     // MARK: Abfragen
 
     /// Das Konto mit dieser ID. Eine Anbieter-ID (`claude`) ist die des Standardkontos;
-    /// `claude@knappstes` ist das knappste Konto des Anbieters (`LimitsAccounts`). Fehlt das
-    /// Konto (ausgeblendet, Ordner weg), ist das Ergebnis `nil` – nie still ein anderes Konto.
+    /// `claude@knappstes` ist das knappste Konto des Anbieters (`LimitsAccounts`).
+    /// Ist das Standardkonto ausgeblendet, weicht `claude` auf das knappste Konto des Anbieters
+    /// aus (Sven, Antwort auf die offenen Fragen zu PR #5). Fehlt ein weiteres Konto
+    /// (`claude@<hash>`, ausgeblendet oder Ordner weg), ist das Ergebnis `nil` – das Widget
+    /// nennt es dann beim Namen, statt still ein anderes zu zeigen.
     public func provider(_ id: String) -> Provider? {
         if let exact = providers.first(where: { $0.id == id }) { return exact }
-        guard let kind = LimitsAccounts.tightestKind(id) else { return nil }
+        let kind = LimitsAccounts.tightestKind(id) ?? (id.contains("@") ? nil : id)
+        guard let kind else { return nil }
         return providers.filter { $0.providerKind == kind }.enumerated().max { a, b in
             let pa = a.element.snapshot?.tightestWindow?.percent ?? -1, pb = b.element.snapshot?.tightestWindow?.percent ?? -1
             return pa != pb ? pa < pb : a.offset > b.offset
         }?.element
+    }
+
+    /// Zeigt `id` gerade ein anderes Konto als das gewählte – „knappstes Konto“ oder ein
+    /// ausgeblendetes Standardkonto, für das das knappste einspringt?
+    public func showsTightestInstead(of id: String) -> Bool {
+        if LimitsAccounts.tightestKind(id) != nil { return true }
+        return !id.contains("@") && id != LimitsAccounts.tightestID
+            && !providers.contains { $0.id == id } && provider(id) != nil
     }
 
     /// Anzeigename eines Anbieters ohne Konto, für den Verbrauch.

@@ -133,6 +133,18 @@ final class UsageStore {
         }
     }
 
+    /// Einrichtungsfehler (Ordner fehlt, keine Anmeldung im Ordner): Nur dann bietet das
+    /// Popover „Einstellungen öffnen“ an, nicht bei Abruffehlern (Sven, Antwort zu PR #5).
+    func needsSetup(_ provider: any UsageProvider) -> Bool {
+        problem(for: provider) != nil
+    }
+
+    /// Haken der Checkbox „Anzeigen“: Fehlt der Ordner, bleibt sie leer (Sven, Antwort zu PR #5),
+    /// sonst angehakt, solange das Konto nicht ausgeblendet ist.
+    func showsAsChecked(_ provider: any UsageProvider) -> Bool {
+        status(of: provider) != .missingFolder && !isHidden(provider.id)
+    }
+
     /// Konto mit Fehler und ohne Stand: grau mit „!“ in der Kontoleiste.
     func hasProblem(_ provider: any UsageProvider) -> Bool {
         if problem(for: provider) != nil { return true }

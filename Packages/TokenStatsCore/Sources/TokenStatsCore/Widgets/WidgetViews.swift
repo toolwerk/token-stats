@@ -302,7 +302,9 @@ struct MachineFooter: View {
             (Text(machine) + Text(" · vor ") + Text(snapshot.writtenAt, style: .relative))
                 .font(.system(size: 9.5))
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
+                // Umbrechen statt kürzen: In der kleinen Kachel stand sonst „vor 12 Min., 0…“
+                // (Designer-Prüfung PR #5, Runde 10, Bild mit Fußzeile).
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -513,7 +515,9 @@ public struct LimitsWidgetView: View {
 
     /// Pflichtdetail bei „Claude – knappstes Konto“: Das gezeigte Konto wechselt von selbst.
     private var selectionDetail: String? {
-        provider.flatMap(LimitsAccounts.tightestKind) == nil ? nil : "knappstes\u{00A0}Konto"
+        // Auch wenn ein ausgeblendetes Standardkonto durch das knappste ersetzt wird.
+        guard let provider, let snapshot, snapshot.showsTightestInstead(of: provider) else { return nil }
+        return "knappstes\u{00A0}Konto"
     }
 
     @ViewBuilder
@@ -643,8 +647,9 @@ public struct LimitsWidgetView: View {
 
     @ViewBuilder
     private func section(_ provider: WidgetSnapshot.Provider, columns: Int, maxWindows: Int, compact: Bool) -> some View {
-        // Ist kein Platz für alle, die knappsten – in der Reihenfolge der App; die übrigen
-        // stehen als „+N Limits“ im Kopf.
+        // Ist kein Platz für alle, die knappsten – absteigend nach Prozent, bei Gleichstand in der
+        // Reihenfolge der App (Sven, 27.11.); die übrigen stehen als „+N Limits“ im Kopf. Passen
+        // alle, bleibt die Reihenfolge der App.
         let picked = LimitsAccounts.pick(provider.snapshot?.windows ?? [], maximum: maxWindows)
         let windows = picked.shown
         // Die Spalten sind schmal; der Zusatz „7 d, alle Modelle“ passt nur im großen Widget.

@@ -120,6 +120,10 @@ public enum LimitsAccounts {
         }
         let kind = kind(of: id)
         let title = snapshot?.accountNames?[id] ?? (id == kind ? kindName(kind, in: snapshot) : "\(kindName(kind, in: snapshot)) · Konto")
+        // Ausgeblendetes Standardkonto: Das Widget zeigt das knappste Konto des Anbieters.
+        if id == kind, snapshot?.provider(id) != nil {
+            return Choice(id: id, title: title, subtitle: "ausgeblendet – zeigt knappstes Konto")
+        }
         return Choice(id: id, title: title, subtitle: "nicht mehr da")
     }
 
@@ -133,15 +137,16 @@ public enum LimitsAccounts {
 
     // MARK: Kleines und mittleres Widget
 
-    /// Die Limits, die ein Konto im Widget zeigt: alle, wenn sie passen, sonst die `maximum`
-    /// knappsten in der Reihenfolge der App. `hidden` zählt die weggelassenen – sie stehen als
-    /// „+1 Limit“ bzw. „+2 Limits“ im Kopf und fallen nie still weg (Sven, 27.11.2026).
+    /// Die Limits, die ein Konto im Widget zeigt. Passen alle, in der Reihenfolge der App.
+    /// Sonst die `maximum` knappsten, **absteigend nach Prozent**, bei Gleichstand in der
+    /// Reihenfolge der App (Sven, 27.11.2026). `hidden` zählt die weggelassenen – sie stehen als
+    /// „+1 Limit“ bzw. „+2 Limits“ im Kopf und fallen nie still weg.
     public static func pick(_ windows: [LimitWindow], maximum: Int) -> (shown: [LimitWindow], hidden: Int) {
         guard windows.count > maximum else { return (windows, 0) }
-        let keep = Set(windows.enumerated()
+        let shown = windows.enumerated()
             .sorted { $0.element.percent != $1.element.percent ? $0.element.percent > $1.element.percent : $0.offset < $1.offset }
-            .prefix(max(maximum, 0)).map(\.element.id))
-        let shown = windows.filter { keep.contains($0.id) }
+            .prefix(max(maximum, 0))
+            .map(\.element)
         return (shown, windows.count - shown.count)
     }
 

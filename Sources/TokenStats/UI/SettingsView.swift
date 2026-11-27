@@ -411,7 +411,7 @@ private struct AccountsSection: View {
 
     private func visibility(_ provider: any UsageProvider) -> Binding<Bool> {
         Binding(
-            get: { !store.isHidden(provider.id) },
+            get: { store.showsAsChecked(provider) },
             set: { show in
                 store.setHidden(provider.id, !show)
                 changed()

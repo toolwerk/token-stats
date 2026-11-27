@@ -395,8 +395,9 @@ Widget höchstens zwei Titelzeilen.
   „Verbrauch“ (ein Tab je Anbieter) um. Beim Öffnen ist das knappste Konto gewählt; ein
   Klick auf den Anbieter-Tab kehrt zum zuletzt gewählten Konto des Anbieters zurück.
 - **Fehlerkonten** (Ordner fehlt, keine Anmeldung, Abruffehler ohne Stand) bleiben grau mit
-  „!“ in der Kontoleiste. Ihre Seite nennt den Grund in einem Satz, dazu „Einstellungen
-  öffnen“ (Sven, 27.11.2026).
+  „!“ in der Kontoleiste. Ihre Seite nennt den Grund in einem Satz (Sven, 27.11.2026).
+  „Einstellungen öffnen“ gibt es nur bei Einrichtungsfehlern (Ordner fehlt, keine Anmeldung
+  im Ordner), nicht bei Abruffehlern wie „Anmeldung abgelaufen“ (Sven, Antwort zu PR #5).
 - **Kopfzeile des Tabs:** „Claude · frank“, Plan, Zustands-Chip; darf zweizeilig werden.
   Die Fußzeile nennt weiter den Kontonamen, ungekürzt.
 - **Menüleiste und Popover-Kopf:** knappstes Limit über alle Konten. Der Tooltip nennt
@@ -423,7 +424,8 @@ Eine Zuordnung wäre geraten. Darum:
 
 **Einstellungen, Abschnitt „Konten“** (Entwurf und Feldplan vom 27.11.2026). Gruppen
 „Claude“, „Codex“, „Weitere Anbieter“. Jede Kontozeile: **beschriftete Checkbox** mit der
-Bezeichnung (Klick auf den Namen schaltet; angehakt = anzeigen), Herkunfts-Abzeichen
+Bezeichnung (Klick auf den Namen schaltet; angehakt = anzeigen; fehlt der Ordner, bleibt sie
+leer und deaktiviert), Herkunfts-Abzeichen
 („Standard“, „automatisch gefunden“, „von Hand“), darunter E-Mail und Ordner in eigenen
 Zeilen, ungekürzt. Die Bezeichnung ändert man über den **Stift**: Dann steht ein Feld über
 die volle Breite mit „Fertig“ (Enter übernimmt, Esc bricht ab), Platzhalter ist die
@@ -472,13 +474,19 @@ Konten hat einen eigenen Abschnitt; erster Eintrag ist **„Claude – knappstes
   im Intent, ausgeblendet über `parameterSummary`. Neu ist der Parameter `account`.
   Solange `account` leer ist, gilt der alte Wert. So muss WidgetKit keinen gespeicherten
   Enum-Wert in eine Entity umwandeln – ob es das könnte, ist nicht dokumentiert.
-- **Fehlt das gewählte Konto** (ausgeblendet, Ordner entfernt), zeigt das Widget kein
-  anderes, sondern seinen letzten Namen und „Konto ausgeblendet oder Ordner fehlt. Widget
-  bearbeiten und ein anderes Konto wählen.“ Die Liste nennt es „Claude · Kunde A“ mit
-  „nicht mehr da“, nie `claude@…`. Dafür schreibt die App `accountNames` (Konto-ID → letzter
+- **Ausgeblendetes Standardkonto:** Ein Widget auf „Claude“ weicht auf das Claude-Konto mit
+  dem knappsten Limit aus, mit „knappstes Konto“ im Kopf; die Liste sagt „ausgeblendet –
+  zeigt knappstes Konto“ (Sven, Antwort zu PR #5).
+- **Fehlt ein anderes gewähltes Konto** (`claude@…`, ausgeblendet oder Ordner entfernt), zeigt
+  das Widget kein anderes, sondern seinen letzten Namen und „Konto ausgeblendet oder Ordner
+  fehlt. Widget bearbeiten und ein anderes Konto wählen.“ Die Liste nennt es „Claude · Kunde A“
+  mit „nicht mehr da“, nie `claude@…`. Dafür schreibt die App `accountNames` (Konto-ID → letzter
   Titel, nur Titel) in `widgets.json` (optional, Version bleibt 1). Damit die Liste nicht
   ohne Ende wächst: Titel aktueller Konten immer, verschwundene 180 Tage ab dem letzten
   Sehen und höchstens 50 davon; danach heißt ein solches Konto „Claude · Konto“.
+- **Klein und mittel:** Passen nicht alle Limits, stehen die knappsten absteigend nach Prozent
+  (bei Gleichstand in der Reihenfolge der App), die übrigen als „+1 Limit“ bzw. „+N Limits“ im
+  Kopf (Sven, 27.11.2026). Passen alle, bleibt die Reihenfolge der App.
 - **Großes Widget:** alle sichtbaren Konten, auch Fehlerkonten. Passen die Abschnitte mit
   allen Limits nicht, eine Tabelle „Konto | Knappstes Limit“ (eine Zeile je Konto, Fehler
   zuerst, dann nach knappstem Limit absteigend), passt auch die nicht, eine Sammelzeile

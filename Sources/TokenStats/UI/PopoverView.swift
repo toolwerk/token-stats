@@ -452,10 +452,9 @@ private struct ProviderPage: View {
 
     @ViewBuilder
     private var limitsContent: some View {
+            // Abruffehler (z. B. Anmeldung abgelaufen): nur der Satz, kein „Einstellungen öffnen“ –
+            // den gibt es nur bei Einrichtungsfehlern (oben, `problem`).
             StatusLine(state: state)
-            if state.snapshot == nil, state.error != nil, !state.isRateLimited {
-                Button("Einstellungen öffnen", action: openSettings)
-            }
 
             if let snapshot = state.snapshot {
                 VStack(spacing: 18) {
