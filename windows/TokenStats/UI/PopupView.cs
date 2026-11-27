@@ -289,7 +289,7 @@ public sealed class PopupView
             avatar.VerticalAlignment = VerticalAlignment.Center;
             DockPanel.SetDock(avatar, Dock.Left);
             // Ungekürzt: Der Name nimmt die Restbreite und bricht notfalls um.
-            var dock = new DockPanel { LastChildFill = true, Margin = new Thickness(4, 0, 4, 0) };
+            var dock = new DockPanel { LastChildFill = true };
             dock.Children.Add(avatar);
             dock.Children.Add(label);
             left = dock;
@@ -311,7 +311,8 @@ public sealed class PopupView
             "Einstellungen (Strg+,)", openSettings), 8);
 
         var footer = Ui.Spread(left, right);
-        return new Border { Background = p.Footer, Padding = new Thickness(Inset - 4, 10, Inset - 4, 10), Child = footer };
+        // Links und rechts derselbe Innenabstand wie im übrigen Popup (Avatar bzw. Einstellungen-Knopf am Rand).
+        return new Border { Background = p.Footer, Padding = new Thickness(Inset, 10, Inset, 10), Child = footer };
     }
 
     UIElement FooterButton(UIElement content, string help, Action action)

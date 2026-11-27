@@ -167,10 +167,34 @@ public sealed class AccountTests : IDisposable
                      CommandText.Split("Stand der letzten »agy«-Sitzung. Aktualisiert sich, sobald »agy« läuft."));
         Assert.Equal([P("Abfragelimit erreicht.")], CommandText.Split("Abfragelimit erreicht."));
         Assert.Empty(CommandText.Split(""));
+    }
 
-        // Umbruch nur an Leerzeichen, nie im Pfad.
-        Assert.Equal(new[] { "$env:CLAUDE_CONFIG_DIR=\"C:\\Daten\\claude-arbeit\";", "claude" },
-                     CommandText.Tokens(AccountDiscovery.FolderKind.Claude.LoginCommand(@"C:\Daten\claude-arbeit")));
+    [Fact]
+    public void WrapsCommandsWithoutCuttingThem()
+    {
+        var command = AccountDiscovery.FolderKind.Claude.LoginCommand(@"C:\Daten\claude-arbeit");   // 55 Zeichen, erster Teil 48
+
+        // Passt alles, eine Zeile.
+        Assert.Equal(new[] { command }, CommandText.Wrap(command, 60));
+        // Leerzeichen geht vor; die Folgezeile ist um zwei Zeichen eingerückt.
+        Assert.Equal(new[] { "$env:CLAUDE_CONFIG_DIR=\"C:\\Daten\\claude-arbeit\";", "  claude" }, CommandText.Wrap(command, 50));
+        // Ein zu langer Teil bricht nach „/“, das Zeichen bleibt am Zeilenende; die Einrückung zählt mit.
+        Assert.Equal(new[] { "/Users/", "  kunde/", "  arbeit" }, CommandText.Wrap("/Users/kunde/arbeit", 8));
+        // Nach „=“, und als letzter Ausweg hart.
+        Assert.Equal(new[] { "KEY=", "  valueval", "  uevalue" }, CommandText.Wrap("KEY=valuevaluevalue", 10));
+        Assert.Equal(new[] { "abcd", "  ef", "  gh", "  ij" }, CommandText.Wrap("abcdefghij", 4));
+        // Für die Einrückung zu schmal: ohne Einrückung, aber nie breiter.
+        Assert.Equal(new[] { "ab", "cd" }, CommandText.Wrap("abcd", 2));
+
+        // Für jede Breite: keine Zeile zu lang, nichts geht verloren.
+        var codex = AccountDiscovery.FolderKind.Codex.LoginCommand(@"C:\Users\Kunde A\.codex-arbeit");
+        foreach (var cmd in new[] { command, codex })
+            for (var width = 1; width <= 70; width++)
+            {
+                var lines = CommandText.Wrap(cmd, width);
+                Assert.All(lines, line => Assert.True(line.Length <= width, $"{width}: „{line}“"));
+                Assert.Equal(cmd.Replace(" ", ""), string.Concat(lines).Replace(" ", ""));
+            }
     }
 
     [Fact]

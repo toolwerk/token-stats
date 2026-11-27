@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -33,7 +34,7 @@ static class Ui
 
     /// <summary>
     /// Hinweis, der Befehle in »…« enthalten kann: Satzteile brechen normal um, jeder Befehl steht als
-    /// eigene Zeile in Monospace (ohne »…«) und bricht nur an Leerzeichen. <paramref name="brush"/> und
+    /// eigene Zeile in Monospace (ohne »…«) und bricht nach <see cref="CommandText.Wrap"/> um. <paramref name="brush"/> und
     /// <paramref name="font"/> leer = vom Fenster erben (Einstellungen).
     /// </summary>
     public static StackPanel Prose(string text, double size, Brush? brush = null, FontFamily? font = null)
@@ -58,25 +59,10 @@ static class Ui
         return panel;
     }
 
-    /// <summary>Befehlszeile: ein Block je durch Leerzeichen getrenntem Teil, jeder ohne Umbruch; Rechtsklick kopiert.</summary>
-    public static WrapPanel Command(string command, double size, Brush? brush = null)
+    /// <summary>Befehlszeile in Monospace, umbrochen statt abgeschnitten (<see cref="CommandLines"/>); Rechtsklick kopiert den ganzen Befehl.</summary>
+    public static FrameworkElement Command(string command, double size, Brush? brush = null)
     {
-        // Transparenter Hintergrund, damit der Rechtsklick auch zwischen den Teilen greift.
-        var line = new WrapPanel { Background = Brushes.Transparent };
-        foreach (var token in CommandText.Tokens(command))
-        {
-            var block = new TextBlock
-            {
-                Text = token,
-                FontFamily = Mono,
-                FontSize = size,
-                TextWrapping = TextWrapping.NoWrap,
-                TextTrimming = TextTrimming.None,
-                Margin = new Thickness(0, 0, Math.Round(size * 0.6), 0),
-            };
-            if (brush is not null) block.Foreground = brush;
-            line.Children.Add(block);
-        }
+        var lines = new CommandLines(command, size, brush);
         var copy = new MenuItem { Header = "Befehl kopieren" };
         copy.Click += (_, _) =>
         {
@@ -86,8 +72,8 @@ static class Ui
         };
         var menu = new ContextMenu();
         menu.Items.Add(copy);
-        line.ContextMenu = menu;
-        return line;
+        lines.ContextMenu = menu;
+        return lines;
     }
 
     public static TextBlock Icon(string glyph, double size, Brush brush) => new()
@@ -156,5 +142,78 @@ static class Ui
             action();
         };
         return border;
+    }
+}
+
+/// <summary>
+/// Ein Befehl, umbrochen nach <see cref="CommandText.Wrap"/> für die angebotene Breite: nie breiter,
+/// nie abgeschnitten. Monospace, darum genügt eine einmal gemessene Zeichenbreite.
+/// </summary>
+public sealed class CommandLines : FrameworkElement
+{
+    readonly string command;
+    readonly double size;
+    List<string> lines = [];
+    double charWidth;
+    double lineHeight;
+
+    static readonly Typeface MonoFace = new(Ui.Mono, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+
+    /// <summary>
+    /// Vordergrund wie bei TextBlock: vom Fenster geerbt und bei Änderung neu gezeichnet – so zieht ein
+    /// Wechsel zwischen hell und dunkel ohne Neuaufbau nach.
+    /// </summary>
+    public static readonly DependencyProperty ForegroundProperty =
+        System.Windows.Documents.TextElement.ForegroundProperty.AddOwner(typeof(CommandLines),
+            new FrameworkPropertyMetadata(SystemColors.ControlTextBrush,
+                FrameworkPropertyMetadataOptions.Inherits | FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public Brush Foreground
+    {
+        get => (Brush)GetValue(ForegroundProperty);
+        set => SetValue(ForegroundProperty, value);
+    }
+
+    /// <summary><paramref name="brush"/> leer = Vordergrund vom Fenster erben (Einstellungen).</summary>
+    public CommandLines(string command, double size, Brush? brush)
+    {
+        this.command = command;
+        this.size = size;
+        if (brush is not null) Foreground = brush;
+    }
+
+    FormattedText Line(string text, Brush foreground) =>
+        new(text, CultureInfo.InvariantCulture, FlowDirection.LeftToRight, MonoFace, size, foreground,
+            VisualTreeHelper.GetDpi(this).PixelsPerDip);
+
+    protected override Size MeasureOverride(Size availableSize)
+    {
+        var probe = Line("MMMMMMMMMM", Brushes.Black);
+        charWidth = probe.WidthIncludingTrailingWhitespace / 10;
+        lineHeight = probe.Height;
+        // Kleiner Zuschlag gegen Rundung: Bei genau n Zeichen Platz sollen auch n Zeichen passen.
+        var maxChars = double.IsInfinity(availableSize.Width) || charWidth <= 0
+            ? int.MaxValue
+            : Math.Max(1, (int)Math.Floor((availableSize.Width + 0.01) / charWidth));
+        var wrapped = CommandText.Wrap(command, maxChars);
+        // Andere Zeilen bei gleicher Gesamtgröße lösen kein neues Zeichnen aus – darum selbst anstoßen.
+        if (!wrapped.SequenceEqual(lines))
+        {
+            lines = wrapped;
+            InvalidateVisual();
+        }
+        var longest = lines.Count == 0 ? 0 : lines.Max(line => line.Length);
+        var width = longest * charWidth;
+        if (!double.IsInfinity(availableSize.Width)) width = Math.Min(width, availableSize.Width);
+        return new Size(width, lines.Count * lineHeight);
+    }
+
+    protected override void OnRender(DrawingContext context)
+    {
+        // Transparente Fläche: Der Rechtsklick greift auch zwischen den Zeichen.
+        context.DrawRectangle(Brushes.Transparent, null, new Rect(RenderSize));
+        var foreground = Foreground ?? Brushes.Black;
+        for (var index = 0; index < lines.Count; index++)
+            context.DrawText(Line(lines[index], foreground), new Point(0, index * lineHeight));
     }
 }
