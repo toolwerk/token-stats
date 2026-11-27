@@ -48,3 +48,39 @@ function aggregate(usage, n, locale) {
     models.sort(function (a, b) { return (b.in + b.out + b.cache) - (a.in + a.out + a.cache) })
     return { total: total, cache: cache, value: value, unpriced: unpriced, models: models, series: series }
 }
+
+// Monospace-Befehl -> Zeilen mit höchstens maxChars Zeichen, Folgezeilen um indent Leerzeichen eingerückt
+// (zählt mit). Bruch am letzten passenden Leerzeichen, sonst nach dem letzten / = _ - . :, sonst hart.
+// Dieselbe Regel wie wrap_command in backend.py und gtk/tokenstats.py (linux/tests prüft beide gleich).
+var COMMAND_BREAK_AFTER = "/=_-.:"
+
+function wrapCommand(command, maxChars, indent) {
+    if (indent === undefined) indent = 2
+    var text = String(command).split(/\s+/).filter(function (t) { return t.length > 0 }).join(" ")
+    maxChars = Math.max(1, Math.floor(maxChars) || 1)
+    indent = Math.max(0, Math.min(indent, maxChars - 1))
+    var pad = new Array(indent + 1).join(" ")
+    var lines = [], first = true
+    while (text.length) {
+        var limit = first ? maxChars : maxChars - indent
+        var line
+        if (text.length <= limit) {
+            line = text; text = ""
+        } else {
+            var cut = text.lastIndexOf(" ", limit)
+            if (cut > 0) {
+                line = text.substring(0, cut); text = text.substring(cut + 1)
+            } else {
+                cut = -1
+                for (var i = 0; i < COMMAND_BREAK_AFTER.length; i++)
+                    cut = Math.max(cut, text.lastIndexOf(COMMAND_BREAK_AFTER[i], limit - 1))
+                cut = cut >= 0 ? cut + 1 : limit
+                line = text.substring(0, cut); text = text.substring(cut)
+            }
+        }
+        lines.push(first ? line : pad + line)
+        text = text.replace(/^ +/, "")
+        first = false
+    }
+    return lines
+}

@@ -10,7 +10,9 @@ import importlib.util
 import io
 import json
 import os
+import random
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -317,6 +319,66 @@ class PartsTest(unittest.TestCase):
                          {"kind": "text", "text": "Stand 12:00  ·  ⚠ Anmeldung abgelaufen:"})
         self.assertEqual(gtk.prefixed("Stand 12:00  ·  ⚠", [{"kind": "cmd", "text": "claude"}]),
                          [{"kind": "text", "text": "Stand 12:00  ·  ⚠"}, {"kind": "cmd", "text": "claude"}])
+
+
+class WrapCommandTest(unittest.TestCase):
+    """wrap_command: Befehle nie abschneiden, nie breiter als verfügbar; Plasma (util.js) rechnet gleich."""
+    KUNDE = "CLAUDE_CONFIG_DIR=~/konten/kunde-a claude"
+
+    def each(self):
+        for name, module in MODULES.items():
+            with self.subTest(module=name):
+                yield module
+
+    def test_fits_on_one_line(self):
+        for module in self.each():
+            self.assertEqual(module.wrap_command(self.KUNDE, 80), [self.KUNDE])
+            self.assertEqual(module.wrap_command("  claude   auth  login ", 80), ["claude auth login"])
+
+    def test_prefers_spaces(self):
+        for module in self.each():
+            self.assertEqual(module.wrap_command(self.KUNDE, 38), ["CLAUDE_CONFIG_DIR=~/konten/kunde-a", "  claude"])
+            self.assertEqual(module.wrap_command("claude auth login", 12), ["claude auth", "  login"])
+
+    def test_breaks_after_slash_and_equals(self):
+        for module in self.each():
+            # kein Leerzeichen passt: nach dem letzten „/“ bzw. „=“ der Zeile, das Zeichen bleibt am Ende
+            self.assertEqual(module.wrap_command("CLAUDE_CONFIG_DIR=~/konten/kunde-a", 28),
+                             ["CLAUDE_CONFIG_DIR=~/konten/", "  kunde-a"])
+            self.assertEqual(module.wrap_command("CLAUDE_CONFIG_DIR=~/x", 19), ["CLAUDE_CONFIG_DIR=", "  ~/x"])
+            self.assertEqual(module.wrap_command("TOKENSTATS_CLAUDE_DIRS=/pfad/eins:/pfad/zwei", 30),
+                             ["TOKENSTATS_CLAUDE_DIRS=/pfad/", "  eins:/pfad/zwei"])
+
+    def test_hard_break_as_last_resort(self):
+        for module in self.each():
+            self.assertEqual(module.wrap_command("abcdefghijkl", 5), ["abcde", "  fgh", "  ijk", "  l"])
+
+    def test_indent_and_never_too_long(self):
+        rng = random.Random(7)
+        alphabet = "abcXYZ019 /=_-.:~"
+        for module in self.each():
+            for _ in range(300):
+                command = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 90)))
+                width = rng.randint(1, 40)
+                lines = module.wrap_command(command, width)
+                self.assertTrue(all(len(line) <= width for line in lines), (command, width, lines))
+                if width >= 3:
+                    self.assertTrue(all(line.startswith("  ") and line[2] != " " for line in lines[1:]), lines)
+                # nichts geht verloren: nur Leerzeichen an Bruchstellen fallen weg
+                self.assertEqual("".join(lines).replace(" ", ""), command.replace(" ", ""))
+
+    @unittest.skipUnless(shutil.which("node"), "node fehlt")
+    def test_util_js_matches(self):
+        rng = random.Random(11)
+        cases = [(self.KUNDE, w) for w in range(1, 45)]
+        cases += [("".join(rng.choice("ab1 /=_-.:") for _ in range(rng.randint(1, 60))), rng.randint(1, 30))
+                  for _ in range(200)]
+        with open(os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "code", "util.js")) as f:
+            js = f.read().replace(".pragma library", "")
+        js += "\nconst cases = " + json.dumps(cases) + ";\n"
+        js += "console.log(JSON.stringify(cases.map(c => wrapCommand(c[0], c[1], 2))));\n"
+        out = subprocess.run(["node", "-"], input=js, capture_output=True, text=True, check=True).stdout
+        self.assertEqual(json.loads(out), [backend.wrap_command(c, w) for c, w in cases])
 
 
 class BackendOutputTest(unittest.TestCase):

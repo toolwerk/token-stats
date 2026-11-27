@@ -37,9 +37,11 @@ Every `CLAUDE_CONFIG_DIR` is an account of its own (SPEC §6 "Mehrere Konten je 
   selects the tightest account. The page heading reads "Claude · frank" (only "Claude" with a
   single account) and may wrap; nothing is shortened. Hints name the folder, e.g. "Nicht
   angemeldet:" followed by `CLAUDE_CONFIG_DIR=~/.claude-2 claude` and "starten". A command in a
-  hint or in the empty state is shown on a line of its own in monospace and only wraps at spaces,
-  never inside a token (`/`, `-` and `_` would otherwise be break points); the backend's
-  `text_parts()` splits a hint into sentence parts and commands (`»…«`).
+  hint or in the empty state is shown on lines of its own in monospace and is never cut off: it
+  wraps at spaces first, a part wider than the line after one of `/ = _ - . :` (the character stays
+  at the line end), and only as a last resort after any character; continuation lines are indented
+  by two characters. The backend's `text_parts()` splits a hint into sentence parts and commands
+  (`»…«`), `wrap_command()` (and `wrapCommand()` in `util.js`) does the wrapping.
 - A folder from `TOKENSTATS_CLAUDE_DIRS` or `CLAUDE_CONFIG_DIR` that does not exist (an unmounted
   drive, say) stays in the account bar, grey with "!", and is never queried. Its page says
   "Ordner nicht gefunden: {pfad}. Ist das Laufwerk eingehängt, erscheint das Konto von selbst

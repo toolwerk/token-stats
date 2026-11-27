@@ -30,7 +30,7 @@ except ImportError:
         raise
     # Nur für linux/tests: ohne GTK importierbar, damit sich die Kontologik prüfen lässt. Die Oberfläche läuft so nicht.
     cairo = gi = Gdk = GLib = Gio = Pango = None
-    Gtk = type("Gtk", (), {"DrawingArea": object, "Window": object})
+    Gtk = type("Gtk", (), {"DrawingArea": object, "Window": object, "Label": object})
 
 LayerShell = None
 if gi:
@@ -65,7 +65,7 @@ MISSING_FOLDER_HINT = "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfern
 EMPTY_TITLE = "Kein Claude-Konto gefunden"
 
 # Befehle in Hinweisen stehen in »…« (ältere Cache-Einträge: `…`). Die Anzeige setzt jeden Befehl in Monospace
-# auf eine eigene Zeile und bricht ihn nur an Leerzeichen um, nie innerhalb eines Tokens.
+# auf eigene Zeilen, umgebrochen mit wrap_command (QML: wrapCommand in util.js, dieselbe Regel).
 COMMAND_RE = re.compile(r"»([^«]*)«|`([^`]*)`")
 # leerer Zustand, direkt als Teile (Textkatalog „Mehrere Konten“, Abschnitt „Linux“)
 EMPTY_PARTS = [{"kind": "text", "text": "Melde dich mit"}, {"kind": "cmd", "text": "claude"},
@@ -89,6 +89,35 @@ def text_parts(text):
         pos = m.end()
     add("text", text[pos:])
     return parts
+
+
+# Zeichen, nach denen ein Befehl umbrechen darf, wenn kein Leerzeichen passt (das Zeichen bleibt am Zeilenende)
+COMMAND_BREAK_AFTER = "/=_-.:"
+
+
+def wrap_command(command, max_chars, indent=2):
+    """Monospace-Befehl -> Zeilen mit höchstens max_chars Zeichen, Folgezeilen um indent Leerzeichen eingerückt
+    (die Einrückung zählt mit). Bruch am letzten passenden Leerzeichen, sonst nach dem letzten / = _ - . :,
+    sonst hart nach max_chars Zeichen; führende Leerzeichen einer Folgezeile entfallen. Nichts geht verloren."""
+    text = " ".join(str(command).split())
+    max_chars = max(1, int(max_chars))
+    indent = max(0, min(indent, max_chars - 1))
+    lines, first = [], True
+    while text:
+        limit = max_chars if first else max_chars - indent
+        if len(text) <= limit:
+            line, text = text, ""
+        else:
+            cut = text.rfind(" ", 0, limit + 1)
+            if cut > 0:
+                line, text = text[:cut], text[cut + 1:]
+            else:
+                cut = max(text.rfind(c, 0, limit) for c in COMMAND_BREAK_AFTER)
+                cut = cut + 1 if cut >= 0 else limit
+                line, text = text[:cut], text[cut:]
+        lines.append(line if first else " " * indent + line)
+        text, first = text.lstrip(" "), False
+    return lines
 
 
 CSS = b"""
@@ -553,27 +582,53 @@ def label(text, css=None, xalign=0, wrap=False):
     return l
 
 
-def command_row(command, css="ts-dim"):
-    """Befehl auf eigener Zeile in Monospace: ein nicht umbrechendes Label je Token, die FlowBox bricht nur
-    zwischen den Tokens um (also an Leerzeichen), nie an „/“, „-“ oder „_“."""
-    flow = Gtk.FlowBox(halign=Gtk.Align.START)
-    flow.set_selection_mode(Gtk.SelectionMode.NONE)
-    flow.set_homogeneous(False)
-    flow.set_min_children_per_line(1)
-    flow.set_max_children_per_line(64)
-    flow.set_column_spacing(7); flow.set_row_spacing(0)   # etwa die Breite eines Leerzeichens
-    for token in command.split():
-        child = Gtk.FlowBoxChild(can_focus=False)
-        child.add(label(token, f"{css} ts-mono"))
-        flow.add(child)
-    return flow
+class CommandLabel(Gtk.Label):
+    """Befehl in Monospace, mit wrap_command auf die zugeteilte Breite umgebrochen: nie abgeschnitten, nie
+    breiter als verfügbar. Die Höhe für eine Breite rechnet das Label selbst (Zeichenbreite per Pango-Layout);
+    nach dem Zuteilen der Breite setzt es den umgebrochenen Text."""
+    MIN_CHARS = 12
+
+    def __init__(self, command, css="ts-dim"):
+        super().__init__(xalign=0)
+        self.command, self.max_chars = command, None
+        for c in f"{css} ts-mono".split():
+            self.get_style_context().add_class(c)
+        self.set_text(" ".join(command.split()))
+        self.connect("size-allocate", self.on_allocate)
+
+    def char_width(self):
+        return self.create_pango_layout("0" * 20).get_pixel_size()[0] / 20 or 8
+
+    def lines_for(self, width):
+        return wrap_command(self.command, max(1, int(width // self.char_width())))
+
+    def do_get_request_mode(self):
+        return Gtk.SizeRequestMode.HEIGHT_FOR_WIDTH
+
+    def do_get_preferred_width(self):
+        char_w = self.char_width()
+        return int(char_w * self.MIN_CHARS) + 1, int(char_w * len(" ".join(self.command.split()))) + 1
+
+    def do_get_preferred_height_for_width(self, width):
+        height = self.create_pango_layout("\n".join(self.lines_for(width))).get_pixel_size()[1]
+        return height, height
+
+    def do_get_preferred_height(self):
+        return self.do_get_preferred_height_for_width(self.do_get_preferred_width()[0])
+
+    def on_allocate(self, _widget, allocation):
+        max_chars = max(1, int(allocation.width // self.char_width()))
+        if max_chars != self.max_chars:
+            self.max_chars = max_chars
+            # nicht mitten in der Größenzuteilung neu setzen; die Höhe dafür ist schon eingeplant
+            GLib.idle_add(self.set_text, "\n".join(wrap_command(self.command, max_chars)))
 
 
 def parts_box(parts, css="ts-dim"):
-    """Satzteile umbrechend, Befehle (kind „cmd“) je als eigene Zeile, siehe command_row."""
+    """Satzteile umbrechend, Befehle (kind „cmd“) je auf eigenen Zeilen, siehe CommandLabel."""
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
     for part in parts:
-        widget = command_row(part["text"], css) if part["kind"] == "cmd" else label(part["text"], css, wrap=True)
+        widget = CommandLabel(part["text"], css) if part["kind"] == "cmd" else label(part["text"], css, wrap=True)
         box.pack_start(widget, False, False, 0)
     return box
 
@@ -606,16 +661,10 @@ class Popup(Gtk.Window):
             LayerShell.set_keyboard_mode(self, LayerShell.KeyboardMode.ON_DEMAND)
         self.page, self.range = "limits", "7d"
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        # Feste Breite 400: Der Inhalt liegt in einem ScrolledWindow ohne Scrollbalken (EXTERNAL), dessen
-        # Mindestbreite nicht vom Inhalt abhängt. Kontoleiste und Texte brechen bei 400 px um; was trotzdem
-        # nicht passt (ein sehr langes Token in einem Befehl), wird abgeschnitten, statt das Fenster zu verbreitern.
-        frame = Gtk.ScrolledWindow()
-        frame.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.EXTERNAL)
-        frame.set_size_request(WIDTH, HEIGHT)
-        viewport = Gtk.Viewport(); viewport.set_shadow_type(Gtk.ShadowType.NONE)
-        viewport.add(outer)
-        frame.add(viewport)
-        self.add(frame)
+        # Feste Breite 400 (Fenster nicht veränderbar): Kein Inhalt verlangt mehr Mindestbreite, Texte, Kontoleiste
+        # und Befehle (CommandLabel) brechen um, statt überzulaufen.
+        outer.set_size_request(WIDTH, HEIGHT)
+        self.add(outer)
 
         head = Gtk.Box(spacing=8, margin=16)
         head.pack_start(label("Token Stats", "ts-title"), True, True, 0)
