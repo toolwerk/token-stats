@@ -66,8 +66,12 @@ Kontoerkennung durch erfundene Konten aus `DemoAccounts` (TokenStatsCore) – f�
 `TOKENSTATS_OPEN_SETTINGS=1` und `make screenshots` Pflicht, sobald Konten zu sehen sind,
 damit nie echte Kontonamen, Adressen oder Ordner im Bild landen. Statt `1` gehen die
 Zustände des Designer-Entwurfs: `one`, `multi`, `many`, `empty`, `invalid`; `make
-screenshots` rendert damit zusätzlich `limits-konten-<zustand>`. Bezeichnungen und
-Ausblenden wirken im Demo-Modus nur im Speicher.
+screenshots` rendert damit zusätzlich `limits-konten-<zustand>` (gewähltes Konto) und
+`limits-konten-<zustand>-offen` (ohne Vorauswahl). `TOKENSTATS_DEMO_EDIT=<Konto-ID>` (plus
+optional `TOKENSTATS_DEMO_EDIT_TEXT`) öffnet in den Einstellungen gleich den Stift-Editor,
+für Bilder. Hell erzwingen bei dunklem System: Startargument
+`-NSRequiresAquaSystemAppearance YES`. Bezeichnungen und Ausblenden wirken im Demo-Modus
+nur im Speicher.
 
 Ohne Xcode (nur Command Line Tools) laufen die Core-Tests mit Swift Testing so:
 `cd Packages/TokenStatsCore && FW=/Library/Developer/CommandLineTools/Library/Developer/Frameworks

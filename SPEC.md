@@ -440,6 +440,10 @@ UserDefaults: `accountLabels` (ID → Text), `hiddenAccounts` (IDs), `accountFol
 (Anbieter → Pfade). Die übrigen Schalter unter „Anzeige“ bleiben vorerst Schalter (eigener
 Auftrag).
 
+**Befehle in Hinweisen** (in »…«) stehen auf allen Plattformen als eigene Zeile in
+Monospace und brechen nur an Leerzeichen um, nie mitten in `CLAUDE_CONFIG_DIR=~/.claude-2`
+(macOS `CommandText`, Windows `CommandText.cs`, Linux `text_parts`).
+
 **Hinweistexte** nennen den Ordner. Ein abgelaufenes Token im zweiten Konto sagt
 „»CLAUDE_CONFIG_DIR=~/.claude-2 claude« im Terminal starten“, denn ein schlichtes `claude`
 erneuert nur das Standardkonto.
@@ -468,7 +472,9 @@ Konten hat einen eigenen Abschnitt; erster Eintrag ist **„Claude – knappstes
   anderes, sondern seinen letzten Namen und „Konto ausgeblendet oder Ordner fehlt. Widget
   bearbeiten und ein anderes Konto wählen.“ Die Liste nennt es „Claude · Kunde A“ mit
   „nicht mehr da“, nie `claude@…`. Dafür schreibt die App `accountNames` (Konto-ID → letzter
-  Titel, nur Titel) in `widgets.json` (optional, Version bleibt 1).
+  Titel, nur Titel) in `widgets.json` (optional, Version bleibt 1). Damit die Liste nicht
+  ohne Ende wächst: Titel aktueller Konten immer, verschwundene 180 Tage ab dem letzten
+  Sehen und höchstens 50 davon; danach heißt ein solches Konto „Claude · Konto“.
 - **Großes Widget:** alle sichtbaren Konten, auch Fehlerkonten. Passen die Abschnitte mit
   allen Limits nicht, eine Tabelle „Konto | Knappstes Limit“ (eine Zeile je Konto, Fehler
   zuerst, dann nach knappstem Limit absteigend), passt auch die nicht, eine Sammelzeile
