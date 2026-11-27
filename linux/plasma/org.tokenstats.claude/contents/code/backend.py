@@ -424,7 +424,7 @@ def limits_with_cache(account):
             entry["retryAt"] = now + min(max(wait, MIN_INTERVAL_S), 86400)
             entry["error"] = f"Abfrage pausiert (Rate-Limit) · wieder ab {hhmm(entry['retryAt'])}"
         else:
-            entry["error"] = f"Anmeldung abgelaufen: {claude_command(account)} starten" if e.code == 401 else f"HTTP {e.code}"
+            entry["error"] = f"Anmeldung abgelaufen: {claude_command(account)} starten" if e.code == 401 else f"Server antwortet mit HTTP {e.code}."
     except Exception as e:
         entry["error"] = f"Offline ({type(e).__name__})"
     save_entry(account, entry)

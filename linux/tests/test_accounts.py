@@ -236,6 +236,22 @@ class ViewTest(unittest.TestCase):
                 self.assertIsNone(loading["missing"])
                 self.assertEqual(self.view(module, account, info, None, count=1)["title"], "Claude")
 
+    def test_fetch_error_sentence_once(self):
+        """HTTP-Fehler als Satz wie auf macOS; ohne Stand nur im Inhalt, nicht noch einmal in der Fußzeile (GTK)."""
+        account = {"id": "claude", "folder": None, "dir": "/x/.claude", "label": "privat", "state": "ok"}
+        error = "Server antwortet mit HTTP 503."
+        without = gtk.account_view(account, None, error, 2)
+        self.assertIsNone(gtk.footer_note("limits", without, None))
+        with_info = gtk.account_view(account, SelectionTest.info(40), error, 2)
+        self.assertEqual(gtk.footer_note("limits", with_info, None), error)
+        self.assertEqual(gtk.footer_note("usage", without, "Verbrauch: OSError"), "Verbrauch: OSError")
+        self.assertIsNone(gtk.footer_note("limits", None, None))
+        for name, module in MODULES.items():
+            with self.subTest(module=name):
+                with open(module.__file__) as f:
+                    source = f.read()
+                self.assertIn('f"Server antwortet mit HTTP {e.code}."', source)
+
     def test_catalog_texts(self):
         for name, module in MODULES.items():
             with self.subTest(module=name):

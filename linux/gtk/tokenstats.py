@@ -291,6 +291,14 @@ def account_view(account, info, note, count):
             "missingHint": MISSING_FOLDER_HINT if missing else None}
 
 
+def footer_note(page, account, usage_note):
+    """Hinweis in der Fußzeile: auf „Limits“ der des Kontos, aber nur mit Stand – ohne Stand steht er schon im
+    Inhalt (render_limits) und nicht noch einmal unten; auf „Verbrauch“ der Hinweis zum Einlesen."""
+    if page != "limits":
+        return usage_note
+    return account["note"] if account and account.get("info") else None
+
+
 def prefixed(prefix, parts):
     """Stellt prefix vor die Teile; beginnen sie mit Text, auf derselben Zeile."""
     if parts and parts[0]["kind"] == "text":
@@ -426,7 +434,7 @@ def _limits_with_cache(account):
             entry["retryAt"] = now + min(max(wait, MIN_INTERVAL_S), 86400)
             entry["error"] = f"Abfrage pausiert (Rate-Limit) · wieder ab {hhmm(entry['retryAt'])}"
         else:
-            entry["error"] = f"Anmeldung abgelaufen: {claude_command(account)} starten" if e.code == 401 else f"HTTP {e.code}"
+            entry["error"] = f"Anmeldung abgelaufen: {claude_command(account)} starten" if e.code == 401 else f"Server antwortet mit HTTP {e.code}."
     except Exception as e:
         entry["error"] = f"Offline ({type(e).__name__})"
     save_entry(account, entry)
@@ -863,7 +871,7 @@ class Popup(Gtk.Window):
         a = self.app
         self.render_tabs()
         account = a.account()
-        warning = (account or {}).get("note") if self.page == "limits" else a.note
+        warning = footer_note(self.page, account, a.note)
         stand = f"Stand {a.updated:%H:%M}" if a.updated else "lädt …"
         for c in self.status.get_children():
             c.destroy()
