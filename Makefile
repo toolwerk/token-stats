@@ -7,7 +7,7 @@ RELEASE_APP := $(BUILD_DIR)/Build/Products/Release/Token Stats.app
 VERSION := $(shell sed -n 's/.*MARKETING_VERSION: "\(.*\)"/\1/p' project.yml)
 DMG := $(BUILD_DIR)/Token-Stats-$(VERSION).dmg
 
-.PHONY: project build test run screenshots release publish clean ios ios-run
+.PHONY: project build test core-test run screenshots release publish clean ios ios-run
 
 # iCloud-Übertragung an die iOS-App (Issue #11) nur auf Wunsch: `make build ICLOUD=1` nimmt die
 # Entitlements mit iCloud-Container. Das verlangt ein Provisioning-Profil (für Developer ID eines
@@ -18,26 +18,51 @@ ICLOUD_SIGNING := $(if $(ICLOUD),CODE_SIGN_ENTITLEMENTS=Config/TokenStats-iCloud
 project:
 	xcodegen generate --quiet
 
-# Debug-Builds signieren mit einem „Apple Development“-Zertifikat aus dem Schlüsselbund, falls
-# eines da ist, sonst ad hoc. Die Widgets brauchen die Team-Signatur: Die App Group heißt
-# <Team-ID>.de.mahype.TokenStats (project.yml), und macOS lässt nur Apps desselben Teams an den
-# Container. Ad hoc signiert läuft die App, aber die Widgets bleiben bei „Token Stats öffnen“.
-DEV_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)
-DEV_TEAM ?= $(shell [ -n "$(DEV_IDENTITY)" ] && security find-certificate -c "$(DEV_IDENTITY)" -p 2>/dev/null | openssl x509 -noout -subject 2>/dev/null | sed -n 's/.*OU *= *\([A-Z0-9]*\).*/\1/p')
+# Debug-Builds signieren mit einem „Apple Development“-Zertifikat aus dem Schlüsselbund, sonst
+# mit „Developer ID Application“, sonst ad hoc. Die Widgets brauchen die Team-Signatur: Die App
+# Group heißt <Team-ID>.de.mahype.TokenStats.debug (project.yml, Debug), und macOS lässt nur
+# Apps desselben Teams an den Container. Ad hoc signiert läuft die App, aber die Widgets bleiben
+# bei „Token Stats öffnen“ – darum die Warnung bei build, run und test.
+# Die Team-ID ist das OU des Zertifikats, nicht die Kennung in Klammern im Namen.
+ifndef DEV_IDENTITY
+DEV_IDENTITY := $(shell ids="$$(security find-identity -v -p codesigning 2>/dev/null)"; \
+	id="$$(printf '%s\n' "$$ids" | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)"; \
+	[ -n "$$id" ] || id="$$(printf '%s\n' "$$ids" | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)"; \
+	printf '%s' "$$id")
+endif
+ifndef DEV_TEAM
+DEV_TEAM := $(shell [ -n "$(DEV_IDENTITY)" ] && security find-certificate -c "$(DEV_IDENTITY)" -p 2>/dev/null | openssl x509 -noout -subject 2>/dev/null | sed -n 's/.*OU *= *\([A-Z0-9]*\).*/\1/p')
+endif
 DEBUG_SIGNING := $(if $(DEV_TEAM),CODE_SIGN_IDENTITY="$(DEV_IDENTITY)" DEVELOPMENT_TEAM=$(DEV_TEAM),)
+ADHOC_WARNING := $(if $(DEV_TEAM),,@printf '\n\033[1;31m%s\033[0m\n%s\n\n' \
+	"WARNUNG: ad hoc signiert – Widgets bekommen keine Daten." \
+	"Kein Zertifikat „Apple Development“ oder „Developer ID Application“ mit Team-ID im Schlüsselbund (security find-identity -v -p codesigning)." >&2)
 
 build: project
+	$(ADHOC_WARNING)
 	xcodebuild -project TokenStats.xcodeproj -scheme TokenStats -configuration Debug \
 		-derivedDataPath $(BUILD_DIR) -quiet build $(DEBUG_SIGNING) $(ICLOUD_SIGNING)
+	$(ADHOC_WARNING)
 
 test: project
+	$(ADHOC_WARNING)
 	xcodebuild -project TokenStats.xcodeproj -scheme TokenStats -configuration Debug \
 		-derivedDataPath $(BUILD_DIR) -quiet test $(DEBUG_SIGNING)
+
+# Tests des gemeinsamen Kerns (Änderungserkennung, Timeline der Widgets) ohne Xcode: Mit den
+# Command Line Tools findet `swift test` das Testing-Framework nicht von selbst.
+CLT := /Library/Developer/CommandLineTools
+CLT_TESTING := -Xswiftc -F -Xswiftc $(CLT)/Library/Developer/Frameworks \
+	-Xlinker -rpath -Xlinker $(CLT)/Library/Developer/Frameworks -Xlinker -rpath -Xlinker $(CLT)/Library/Developer/usr/lib
+
+core-test:
+	cd Packages/TokenStatsCore && $(if $(wildcard $(DEVELOPER_DIR)/usr/bin/xcodebuild),swift test,DEVELOPER_DIR=$(CLT) swift test $(CLT_TESTING))
 
 run: build
 	-pkill -x "Token Stats"
 	@while pgrep -qx "Token Stats"; do sleep 0.2; done; sleep 1
 	open "$(APP)"
+	$(ADHOC_WARNING)
 
 # Rendert die README-Bilder nach screenshots/ (nur Demo-Werte).
 screenshots: build

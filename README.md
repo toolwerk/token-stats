@@ -256,6 +256,9 @@ rm -rf ~/Library/Application\ Support/TokenStats   # letzter Stand und Verbrauch
 defaults delete de.mahype.TokenStats              # Einstellungen
 ```
 
+Selbst gebaute Debug-Fassungen haben eigene Einstellungen (`de.mahype.TokenStats.debug`)
+und einen eigenen Widget-Container (`~/Library/Group Containers/<Team-ID>.de.mahype.TokenStats.debug`).
+
 Unter Windows: App beenden, `TokenStats.exe` und den Ordner `%LOCALAPPDATA%\TokenStats`
 löschen (siehe [`windows/`](windows/README.md)). Deine Anmeldungen bei Claude Code, Codex,
 Antigravity und Ollama bleiben unberührt.
@@ -290,9 +293,9 @@ im Browser oder in einer Desktop-App verbrauchst, fehlt dort.
 | Tokenzahlen (nur lesen) | `~/.claude/projects/**/*.jsonl`, Session-Logs unter `~/.codex/` |
 | Letzter Stand der Limits | `~/Library/Application Support/TokenStats/state.json` (nur Prozente und Reset-Zeiten) |
 | Verbrauchs-Aggregat je Tag und Modell | `~/Library/Application Support/TokenStats/usage.sqlite` |
-| Stand für die Widgets | `~/Library/Group Containers/<Team-ID>.de.mahype.TokenStats/widgets.json` – Prozente, Reset-Zeiten, Tagessummen und Beträge, fertig gerechnet; keine Zugangsdaten |
+| Stand für die Widgets | `~/Library/Group Containers/<Team-ID>.de.mahype.TokenStats/widgets.json` (Debug-Builds: `….TokenStats.debug/`) – Prozente, Reset-Zeiten, Tagessummen und Beträge, fertig gerechnet; keine Zugangsdaten |
 | Stand fürs iPhone (nur wenn eingeschaltet) | private CloudKit-Datenbank `iCloud.de.mahype.TokenStats`, ein Datensatz je Mac mit demselben Inhalt wie `widgets.json` |
-| Einstellungen | UserDefaults `de.mahype.TokenStats` |
+| Einstellungen | UserDefaults `de.mahype.TokenStats` (Debug-Builds: `de.mahype.TokenStats.debug`) |
 | Claude-Kontingent | `api.anthropic.com/api/oauth/usage` |
 | Codex-Kontingent | `chatgpt.com/backend-api/wham/usage` |
 | Ollama-Kontingent, Statistik und Plan | `ollama.com/api/balance`, `ollama.com/api/usage` und `ollama.com/api/me` |
@@ -336,16 +339,20 @@ Gesamt-Tokenzahl würde in die Irre führen.
 | `make ios` · `make ios-run` | iOS-App für den Simulator bauen bzw. dort mit Demo-Werten starten (`SIMULATOR="iPhone 16"` wählt das Gerät) |
 | `make build ICLOUD=1` · `make release ICLOUD=1` | Mac-App mit iCloud-Berechtigung (verlangt ein Provisioning-Profil mit iCloud; für Developer ID `PROVISIONING_PROFILE_SPECIFIER` mitgeben) |
 | `swift build` in `Packages/TokenStatsCore` | nur den gemeinsamen Kern bauen |
+| `make core-test` | Tests des gemeinsamen Kerns (Neuladen und Timeline der Widgets), läuft auch nur mit den Command Line Tools |
 | `Scripts/update-pricing.sh` | Preistabelle aus LiteLLM aktualisieren |
 
 `TokenStats.xcodeproj` ist nicht eingecheckt, XcodeGen erzeugt es bei jedem Build.
 `usage.sqlite` löschen erzwingt ein komplettes Neueinlesen der Logs.
 
 Debug-Builds signiert `make build` mit einem „Apple Development“-Zertifikat aus dem
-Schlüsselbund, falls eines da ist, sonst ad hoc. Die Widgets brauchen die Team-Signatur:
-Die App Group heißt `<Team-ID>.de.mahype.TokenStats`, und macOS lässt nur Apps desselben
-Teams an den Container. Ad hoc signiert läuft die App, die Widgets zeigen dann aber nur
-„Token Stats öffnen“.
+Schlüsselbund, sonst mit „Developer ID Application“, sonst ad hoc. Die Widgets brauchen die
+Team-Signatur: Die App Group heißt im Debug-Build `<Team-ID>.de.mahype.TokenStats.debug`
+(Release: `<Team-ID>.de.mahype.TokenStats`), und macOS lässt nur Apps desselben Teams an den
+Container. Ad hoc signiert läuft die App, die Widgets zeigen dann aber nur „Token Stats
+öffnen“ – `make build`, `make run` und `make test` warnen dann deutlich. Debug-Builds haben
+eine eigene Bundle-ID (`de.mahype.TokenStats.debug`, Widgets `….debug.Widgets`), damit sie
+eine installierte Release-Fassung samt Widgets nicht verdrängen.
 
 | Pfad | Inhalt |
 |---|---|
@@ -357,6 +364,7 @@ Teams an den Container. Ad hoc signiert läuft die App, die Widgets zeigen dann 
 | `Sources/TokenStatsiOS/` | iOS-App: iCloud-Stand laden, Tabs „Limits“ und „Verbrauch“ |
 | `Packages/TokenStatsCore/` | gemeinsamer Kern von App und Widgets: Datenmodell, Formate, Preistabelle, Zustandsfarben, Widget-Views, Demo-Werte |
 | `Tests/TokenStatsTests/` | Parser- und Verbrauchstests |
+| `Packages/TokenStatsCore/Tests/` | Tests des Kerns ohne App-Host (`make core-test`): Neuladen und Timeline der Widgets |
 
 Das vollständige Design mit den Begründungen hinter den Entscheidungen steht in
 [SPEC.md](SPEC.md).

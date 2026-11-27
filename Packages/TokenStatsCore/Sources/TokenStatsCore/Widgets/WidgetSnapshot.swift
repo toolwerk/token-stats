@@ -4,19 +4,35 @@ import Foundation
 /// `~/Library/Group Containers/<Kennung>/`. Die Kennung trägt die Team-ID der Signatur
 /// (`APP_GROUP` in project.yml) und steht in der Info.plist von App und Erweiterung: macOS
 /// lässt nur Apps desselben Teams an den Container, und `group.`-Kennungen verlangen ein
-/// Provisioning-Profil. Ad hoc signierte Builds haben kein Team – dann bleibt die Datei
-/// ungeschrieben und die Widgets zeigen „Token Stats öffnen“.
+/// Provisioning-Profil. Debug-Builds haben eine eigene Kennung (`….debug`), damit sie den
+/// Container des Release nicht überschreiben.
+///
+/// Ad hoc signierte Builds haben kein Team, die Info.plist trägt dann nur `.de.mahype.…`.
+/// Dann gibt es bewusst keine Kennung (kein Rückfall auf die Release-Gruppe): Die Datei
+/// bleibt ungeschrieben, die Widgets zeigen „Token Stats öffnen“, und die Konsole sagt warum.
 public enum AppGroup {
-    public static let identifier: String = {
-        if let value = Bundle.main.object(forInfoDictionaryKey: "TokenStatsAppGroup") as? String,
-           !value.hasPrefix("."), !value.hasPrefix("$") {
-            return value
+    public static let infoKey = "TokenStatsAppGroup"
+
+    public static let identifier: String? = {
+        let raw = Bundle.main.object(forInfoDictionaryKey: infoKey)
+        guard let value = resolve(raw) else {
+            NSLog("Token Stats: keine App Group (%@ = %@) – Build ohne Team-Signatur? Widgets bekommen keine Daten.",
+                  infoKey, String(describing: raw ?? "fehlt"))
+            return nil
         }
-        return "2GA7DQ3P3Z.de.mahype.TokenStats"
+        return value
     }()
 
+    /// Die Kennung aus der Info.plist, falls sie vollständig ist – nicht leer, kein
+    /// unaufgelöstes `$(…)` und kein fehlendes Team-Präfix.
+    public static func resolve(_ raw: Any?) -> String? {
+        guard let value = (raw as? String)?.trimmingCharacters(in: .whitespaces), !value.isEmpty,
+              !value.hasPrefix("."), !value.contains("$") else { return nil }
+        return value
+    }
+
     public static var containerURL: URL? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier)
+        identifier.flatMap { FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0) }
     }
 }
 

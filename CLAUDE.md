@@ -23,13 +23,17 @@ ebenfalls nicht – ihr Inhalt steht in `project.yml`). Das Makefile setzt `DEVE
 weil `xcode-select` hier auf die Command Line Tools zeigt.
 
 Debug-Builds signiert das Makefile mit einem „Apple Development“-Zertifikat aus dem
-Schlüsselbund, falls vorhanden, sonst ad hoc. Nur mit Team-Signatur bekommen die Widgets
-Daten: Die App Group heißt `<Team-ID>.de.mahype.TokenStats` (SPEC §7 „Widgets“). Ob die App
-sie schreiben kann, steht im Debug-Build in stderr („Widget-Stand geschrieben“) –
+Schlüsselbund, sonst mit „Developer ID Application“, sonst ad hoc (dann laute WARNUNG bei
+build/run/test). Nur mit Team-Signatur bekommen die Widgets Daten. Debug hat eigene
+Kennungen: Bundle-ID `de.mahype.TokenStats.debug` (Erweiterung `….debug.Widgets`), App Group
+`<Team-ID>.de.mahype.TokenStats.debug`, UserDefaults `de.mahype.TokenStats.debug`; Release
+bleibt bei `de.mahype.TokenStats` und `<Team-ID>.de.mahype.TokenStats` (SPEC §7 „Widgets“).
+Ob die App sie schreiben kann, steht im Debug-Build in stderr („Widget-Stand geschrieben“) –
 `open --stderr datei "build/…/Token Stats.app"`; der Container selbst ist für das Terminal
 nicht lesbar (TCC). Widgets im Gerätetest: Mitteilungszentrale → „Widgets bearbeiten“ →
 „Token Stats“. Gemeinsamer Code von App und Erweiterung liegt im Paket
-`Packages/TokenStatsCore` (`swift build` dort baut ihn allein).
+`Packages/TokenStatsCore` (`swift build` dort baut ihn allein, `make core-test` testet ihn
+auch ohne Xcode – Änderungserkennung und Timeline der Widgets).
 
 iOS-App (Issue #11): `make ios` baut für den Simulator, `make ios-run` startet sie dort mit
 Demo-Werten zweier Macs (`TOKENSTATS_DEMO=1`; `TOKENSTATS_TAB=usage` für den zweiten Tab,
