@@ -54,7 +54,10 @@ public struct CommandText: View {
     }
 }
 
-/// Ein Befehl: Monospace, je Token nicht umbrechend, Umbruch nur an Leerzeichen.
+/// Ein Befehl: eigene Zeile in Monospace (Designer-Prüfung PR #5, Runde 2). Umbrochen wird
+/// zuerst an Leerzeichen, ist ein Teil zu breit nach `/ = _ - . :` (ohne Trennstrich), erst
+/// als letzter Ausweg nach einem beliebigen Zeichen. Folgezeilen sind 2 Zeichen eingerückt.
+/// Nie breiter als angeboten, nie abgeschnitten. „Befehl kopieren“ kopiert den ganzen Befehl.
 public struct CommandRow: View {
     let command: String
 
@@ -63,14 +66,9 @@ public struct CommandRow: View {
     }
 
     public var body: some View {
-        TokenFlow(spacing: 0) {
-            let tokens = command.split(separator: " ", omittingEmptySubsequences: true)
-            // Leerzeichen hinten am Token: am Zeilenende unsichtbar, am Zeilenanfang kein Einzug.
-            ForEach(Array(tokens.enumerated()), id: \.offset) { index, token in
-                Text(verbatim: index == tokens.count - 1 ? String(token) : token + " ")
-                    .monospaced()
-                    .lineLimit(1)
-                    .fixedSize()
+        CommandWrapLayout(characters: Array(command)) {
+            ForEach(Array(command.enumerated()), id: \.offset) { _, character in
+                Text(verbatim: String(character)).monospaced().fixedSize()
             }
         }
         .accessibilityElement(children: .ignore)
@@ -86,15 +84,107 @@ public struct CommandRow: View {
     }
 }
 
+/// Umbruch eines Befehls, rein und testbar: welche Zeichen in welcher Zeile stehen.
+public enum CommandWrap {
+    /// Nach diesen Zeichen darf ein zu langer Teil umbrechen; das Zeichen bleibt am Zeilenende.
+    public static let softBreaks: Set<Character> = ["/", "=", "_", "-", ".", ":"]
+    /// Einzug der Folgezeilen, in Zeichen.
+    public static let indentCharacters = 2
+
+    /// Zeilen als Bereiche in `characters`. `available` gilt für die erste Zeile, Folgezeilen
+    /// haben `indent` weniger. Leerzeichen am Bruch entfallen. Jede Zeile hat mindestens ein
+    /// Zeichen, auch wenn es allein schon zu breit ist.
+    public static func lines(_ characters: [Character], widths: [CGFloat], available: CGFloat, indent: CGFloat) -> [Range<Int>] {
+        let count = characters.count
+        var result: [Range<Int>] = []
+        var start = 0
+        while start < count {
+            if !result.isEmpty {
+                while start < count, characters[start] == " " { start += 1 }
+                if start >= count { break }
+            }
+            let limit = available - (result.isEmpty ? 0 : indent)
+            var used: CGFloat = 0
+            var end = start
+            while end < count, used + widths[end] <= limit + 0.001 {
+                used += widths[end]
+                end += 1
+            }
+            if end == start { end = start + 1 }
+            if end >= count {
+                result.append(start..<count)
+                break
+            }
+            if characters[end] == " " {
+                result.append(start..<end)
+                start = end
+            } else if let space = (start..<end).last(where: { characters[$0] == " " }), space > start {
+                result.append(start..<space)
+                start = space + 1
+            } else if let soft = (start..<end).last(where: { softBreaks.contains(characters[$0]) }) {
+                result.append(start..<(soft + 1))
+                start = soft + 1
+            } else {
+                result.append(start..<end)
+                start = end
+            }
+        }
+        return result
+    }
+}
+
+/// Legt die Zeichen eines Befehls nach `CommandWrap.lines` in Zeilen.
+struct CommandWrapLayout: Layout {
+    let characters: [Character]
+
+    private func lines(_ subviews: Subviews, width: CGFloat) -> (lines: [Range<Int>], widths: [CGFloat], height: CGFloat, indent: CGFloat) {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let widths = sizes.map(\.width)
+        let indent = CGFloat(CommandWrap.indentCharacters) * (widths.first ?? 0)
+        let lines = CommandWrap.lines(characters, widths: widths, available: width, indent: indent)
+        return (lines, widths, sizes.map(\.height).max() ?? 0, indent)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let available = proposal.width ?? .infinity
+        let layout = lines(subviews, width: available)
+        let widest = layout.lines.enumerated().map { index, line in
+            (index == 0 ? 0 : layout.indent) + line.map { layout.widths[$0] }.reduce(0, +)
+        }.max() ?? 0
+        // Nie mehr als angeboten – sonst wird das Umfeld breiter und schneidet ab.
+        return CGSize(width: min(widest, available), height: CGFloat(layout.lines.count) * layout.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let layout = lines(subviews, width: bounds.width)
+        var placed = Set<Int>()
+        for (index, line) in layout.lines.enumerated() {
+            var x = bounds.minX + (index == 0 ? 0 : layout.indent)
+            let y = bounds.minY + CGFloat(index) * layout.height
+            for character in line {
+                subviews[character].place(at: CGPoint(x: x, y: y), proposal: .unspecified)
+                x += layout.widths[character]
+                placed.insert(character)
+            }
+        }
+        // Leerzeichen am Bruch: unsichtbar an den Anfang.
+        for index in subviews.indices where !placed.contains(index) {
+            subviews[index].place(at: CGPoint(x: bounds.minX, y: bounds.minY), proposal: .zero)
+        }
+    }
+}
+
 /// Teile nebeneinander, bei Platzmangel in die nächste Zeile – ohne einen Teil zu kürzen.
+/// Meldet nie mehr Breite als angeboten.
 struct TokenFlow: Layout {
     var spacing: CGFloat
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = arrange(subviews, width: proposal.width ?? .infinity)
+        let available = proposal.width ?? .infinity
+        let rows = arrange(subviews, width: available)
         let width = rows.map(\.width).max() ?? 0
         let height = rows.map(\.height).reduce(0, +)
-        return CGSize(width: width, height: height)
+        return CGSize(width: min(width, available), height: height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {

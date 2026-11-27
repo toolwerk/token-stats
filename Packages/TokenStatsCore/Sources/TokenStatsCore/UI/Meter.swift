@@ -35,24 +35,41 @@ public struct MeterRow: View {
                 .frame(height: 6)
             // Ollama nennt keine Reset-Zeiten – dann bleibt die Zeile weg statt leer.
             if window.resetsAt != nil || elapsed != nil {
-                let layout = stackDetails ? AnyLayout(VStackLayout(alignment: .leading, spacing: 1)) : AnyLayout(HStackLayout())
-                layout {
-                    if let resetsAt = window.resetsAt {
-                        Text("Reset \(Format.reset(resetsAt, now: now))").lineLimit(1)
-                    }
-                    if !stackDetails { Spacer(minLength: 6) }
-                    if let elapsed, let windowLength = window.windowLength {
-                        let onPace = abs(window.percent - elapsed) < Format.paceTolerance
-                        Text(Format.pace(percent: window.percent, elapsed: elapsed, windowLength: windowLength))
-                            .fontWeight(onPace ? .regular : .semibold)
-                            .foregroundStyle(onPace ? Color.secondary : window.severity.color)
-                            .lineLimit(1)
+                // Nebeneinander, wenn beides ganz passt, sonst untereinander – nie „…“
+                // (Designer-Prüfung PR #5: „33 Min. vorgegri…“ im mittleren Widget).
+                Group {
+                    if stackDetails {
+                        details(stacked: true)
+                    } else {
+                        ViewThatFits(in: .horizontal) {
+                            details(stacked: false)
+                            details(stacked: true)
+                        }
                     }
                 }
                 .font(.system(size: compact ? 10 : 11))
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func details(stacked: Bool) -> some View {
+        let elapsed = window.elapsedFraction(now: now)
+        let layout = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 1)) : AnyLayout(HStackLayout())
+        layout {
+            if let resetsAt = window.resetsAt {
+                Text("Reset \(Format.reset(resetsAt, now: now))").lineLimit(1).fixedSize()
+            }
+            if !stacked { Spacer(minLength: 6) }
+            if let elapsed, let windowLength = window.windowLength {
+                let onPace = abs(window.percent - elapsed) < Format.paceTolerance
+                Text(Format.pace(percent: window.percent, elapsed: elapsed, windowLength: windowLength))
+                    .fontWeight(onPace ? .regular : .semibold)
+                    .foregroundStyle(onPace ? Color.secondary : window.severity.color)
+                    .fixedSize(horizontal: !stacked, vertical: true)
             }
         }
     }

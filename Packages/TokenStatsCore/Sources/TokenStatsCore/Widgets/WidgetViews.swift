@@ -57,16 +57,23 @@ struct WidgetHeader: View {
                     }
                 }
             }
-            // Titel in einer Zeile, Details darunter.
-            row(dot: true) { stack([line(title, Self.titleFont)], details: [selection, detail], dot: false) }
+            // Titel in einer Zeile, Details darunter. Beim knappsten Konto nicht: Dort steht in
+            // jeder Stufe zuerst der Kontoname, dann „knappstes Konto“, dann „Claude · Tarif“.
+            if selection == nil {
+                row(dot: true) { stack([line(title, Self.titleFont)], details: [selection, detail], dot: false) }
+            }
             // Erst mit Punkt rechts im Kopf, dann mit Punkt in der Detailzeile (Titel 12 pt breiter).
             // Kandidaten: Titel am „·“ („Claude ·“ / „Kunde A“), dann der Kontoname zweizeilig an
             // Leerzeichen oder Bindestrich mit „Claude · Tarif“ darunter.
             if let kind, let account {
-                ForEach(Self.candidates(splits: splits.count), id: \.self) { candidate in
+                ForEach(Self.candidates(splits: splits.count, accountFirst: selection != nil), id: \.self) { candidate in
                     let dotInRow = candidate.dotInRow
                     row(dot: dotInRow) {
-                        if let index = candidate.split {
+                        if candidate.accountLine {
+                            stack([line(account, Self.titleFont)],
+                                  details: [selection, [kind, detail].compactMap { $0 }.joined(separator: " · ")],
+                                  dot: !dotInRow)
+                        } else if let index = candidate.split {
                             stack([line(splits[index][0], Self.titleFont), line(splits[index][1], Self.titleFont)],
                                   details: [selection, [kind, detail].compactMap { $0 }.joined(separator: " · ")],
                                   dot: !dotInRow)
@@ -78,14 +85,16 @@ struct WidgetHeader: View {
                 }
             }
             // Letzter Ausweg: Umbruch nur an Leerzeichen und Bindestrichen, nie mitten im Wort.
+            let accountFirst = selection != nil && kind != nil && account != nil
             row(dot: false) {
                 VStack(alignment: .leading, spacing: 1) {
                     TokenFlow(spacing: 0) {
-                        ForEach(Array(Self.breakTokens(title).enumerated()), id: \.offset) { _, token in
+                        ForEach(Array(Self.breakTokens(accountFirst ? account! : title).enumerated()), id: \.offset) { _, token in
                             Text(token).font(Self.titleFont).lineLimit(1).fixedSize()
                         }
                     }
-                    stackDetails([selection, detail], dot: true)
+                    stackDetails(accountFirst ? [selection, [kind!, detail].compactMap { $0 }.joined(separator: " · ")] : [selection, detail],
+                                 dot: true)
                 }
             }
         }
@@ -142,11 +151,15 @@ struct WidgetHeader: View {
     struct Candidate: Hashable {
         var dotInRow: Bool
         var split: Int?
+        /// Kontoname einzeilig als Titel, „Claude · Tarif“ darunter.
+        var accountLine = false
     }
 
-    static func candidates(splits: Int) -> [Candidate] {
+    /// `accountFirst` beim knappsten Konto: statt der Teilung am „·“ der Kontoname als Titel.
+    static func candidates(splits: Int, accountFirst: Bool = false) -> [Candidate] {
         [true, false].flatMap { dot in
-            [Candidate(dotInRow: dot, split: nil)] + (0..<splits).map { Candidate(dotInRow: dot, split: $0) }
+            [Candidate(dotInRow: dot, split: nil, accountLine: accountFirst)]
+                + (0..<splits).map { Candidate(dotInRow: dot, split: $0) }
         }
     }
 
