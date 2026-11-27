@@ -9,7 +9,10 @@ struct PopoverView: View {
     let settings: AppSettings
     let openSettings: () -> Void
 
+    /// Gewähltes Konto (bzw. Anbieter-ID aus einem Widget-Link).
     @State private var selectedID: String?
+    /// Zuletzt gewähltes Konto je Anbieter – ein Klick auf den Anbieter-Tab kehrt dorthin zurück.
+    @State private var chosen: [String: String] = [:]
     /// Beim Öffnen steht immer „Limits“ – die Auswahl wird absichtlich nicht gemerkt.
     @State private var page: Page
 
@@ -31,22 +34,26 @@ struct PopoverView: View {
     static let inset: CGFloat = 16
 
     var body: some View {
-        // „Verbrauch“ gilt je Anbieter: dort ein Tab je Anbieter statt je Konto (SPEC §6).
-        let providers = page == .usage ? Self.firstPerKind(store.sortedProviders) : store.sortedProviders
-        // Beim Öffnen ist der knappste Anbieter aktiv, die Tab-Reihenfolge bleibt fest.
+        // Ein Tab je Anbieter auf beiden Seiten, damit beim Seitenwechsel nichts springt
+        // (SPEC §3.2). Die Konten wählt die Kontoleiste darunter, nur auf „Limits“.
+        let accounts = store.sortedProviders
+        let kinds = Self.firstPerKind(accounts)
+        // Beim Öffnen ist das knappste Konto aktiv, die Reihenfolge bleibt fest.
         let activeID = selectedID ?? store.tightest?.providerID
-        let active = store.sortedProviders.first { $0.id == activeID }
-            ?? store.sortedProviders.first { $0.kind == activeID }
-        let selected = page == .usage
-            ? providers.first { $0.kind == active?.kind } ?? providers.first
-            : active ?? providers.first
+        let active = accounts.first { $0.id == activeID }
+            ?? accounts.first { $0.kind == activeID }
+            ?? accounts.first
+        let selected = page == .usage ? kinds.first { $0.kind == active?.kind } : active
 
         VStack(spacing: 0) {
             header
-            if providers.isEmpty {
+            if kinds.isEmpty {
                 emptyState
             } else {
-                tabBar(providers, selected: selected?.id)
+                tabBar(kinds, activeKind: active?.kind)
+                if page == .limits, let kind = active?.kind, store.accounts(ofKind: kind).count > 1 {
+                    accountBar(store.accounts(ofKind: kind), selected: active?.id)
+                }
                 Divider()
                 if let selected {
                     ProviderPage(
@@ -54,11 +61,13 @@ struct PopoverView: View {
                         title: page == .usage ? selected.displayName : store.title(for: selected),
                         page: page,
                         state: store.states[selected.id] ?? .init(),
+                        problem: page == .limits ? store.problem(for: selected) : nil,
                         isLoading: store.loading.contains(selected.id),
                         consumption: consumption,
                         showMoney: settings.showMoney,
                         subscription: subscription(kind: selected.kind),
-                        accountCount: store.accounts(ofKind: selected.kind).count
+                        accountCount: store.accounts(ofKind: selected.kind).count,
+                        openSettings: openSettings
                     )
                 }
             }
@@ -101,26 +110,23 @@ struct PopoverView: View {
 
     // MARK: Tabs
 
-    private func tabBar(_ providers: [any UsageProvider], selected: String?) -> some View {
-        let titles = providers.map { (provider: $0, label: page == .usage ? nil : store.accountLabel(for: $0)) }
-        let count = Self.visibleTabCount(titles.map { ($0.provider.displayName, $0.label) })
-        let visible = titles.prefix(count)
-        let overflow = titles.dropFirst(count)
+    private func tabBar(_ kinds: [any UsageProvider], activeKind: String?) -> some View {
+        let count = Self.visibleTabCount(kinds.map { ($0.displayName, nil) })
+        let visible = kinds.prefix(count)
+        let overflow = kinds.dropFirst(count)
         return HStack(spacing: 2) {
-            ForEach(visible, id: \.provider.id) { item in
+            ForEach(visible, id: \.kind) { item in
                 TabButton(
-                    title: item.provider.displayName,
-                    label: item.label,
-                    severity: store.states[item.provider.id]?.snapshot?.tightestWindow?.severity,
-                    isActive: item.provider.id == selected
-                ) { selectedID = item.provider.id }
+                    title: item.displayName,
+                    severity: kindSeverity(item.kind),
+                    isActive: item.kind == activeKind
+                ) { select(kind: item.kind) }
             }
+            // „+n“ nur für Anbieter, nie für Konten – Konten stehen in der Kontoleiste.
             if !overflow.isEmpty {
                 Menu("+\(overflow.count)") {
-                    ForEach(overflow, id: \.provider.id) { item in
-                        Button(item.label.map { "\(item.provider.displayName) · \($0)" } ?? item.provider.displayName) {
-                            selectedID = item.provider.id
-                        }
+                    ForEach(overflow, id: \.kind) { item in
+                        Button(item.displayName) { select(kind: item.kind) }
                     }
                 }
                 .menuStyle(.borderlessButton)
@@ -132,6 +138,47 @@ struct PopoverView: View {
         .padding(.horizontal, Self.inset - 10)
     }
 
+    /// Punkt im Anbieter-Tab: das knappste sichtbare Konto des Anbieters.
+    private func kindSeverity(_ kind: String) -> Severity? {
+        store.accounts(ofKind: kind).compactMap { store.states[$0.id]?.snapshot?.tightestWindow }
+            .max { $0.percent < $1.percent }?.severity
+    }
+
+    /// Anbieter-Tab: zuletzt gewähltes Konto des Anbieters, sonst sein knappstes.
+    private func select(kind: String) {
+        let accounts = store.accounts(ofKind: kind)
+        if let last = chosen[kind], accounts.contains(where: { $0.id == last }) {
+            selectedID = last
+            return
+        }
+        selectedID = accounts.max { a, b in
+            (store.states[a.id]?.snapshot?.tightestWindow?.percent ?? -1) < (store.states[b.id]?.snapshot?.tightestWindow?.percent ?? -1)
+        }?.id ?? kind
+    }
+
+    // MARK: Kontoleiste
+
+    /// Chips je Konto unter den Anbieter-Tabs; bricht um, kürzt nichts, kein „+n“.
+    private func accountBar(_ accounts: [any UsageProvider], selected: String?) -> some View {
+        FlowLayout(spacing: 6) {
+            ForEach(accounts, id: \.id) { account in
+                AccountChip(
+                    label: store.label(for: account) ?? account.displayName,
+                    severity: store.states[account.id]?.snapshot?.tightestWindow?.severity,
+                    hasProblem: store.hasProblem(account),
+                    isSelected: account.id == selected
+                ) {
+                    selectedID = account.id
+                    chosen[account.kind] = account.id
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, Self.inset)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+    }
+
     /// Wie viele Tabs in die Breite passen – gemessen statt fest, weil Konten-Tabs länger sind.
     static func visibleTabCount(_ titles: [(String, String?)]) -> Int {
         let available = width - 2 * (inset - 10)
@@ -140,8 +187,7 @@ struct PopoverView: View {
             let bold = NSFont.systemFont(ofSize: 12, weight: .semibold)
             var text = (title as NSString).size(withAttributes: [.font: bold]).width
             if let label {
-                let shown = String(label.prefix(TabButton.maxLabelLength))
-                text += 4 + (shown as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11)]).width
+                text += 4 + (label as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11)]).width
             }
             return ceil(text) + 5 + 5 + 20 + 2
         }
@@ -159,8 +205,8 @@ struct PopoverView: View {
 
     private var emptyState: some View {
         VStack(spacing: 6) {
-            Text("Kein Anbieter gefunden").font(.system(size: 12.5, weight: .semibold))
-            Text("Token Stats sucht nach Claude Code (~/.claude) und Codex (~/.codex).")
+            Text("Kein Konto gefunden").font(.system(size: 12.5, weight: .semibold))
+            Text("Melde dich in Claude Code oder Codex an. Weitere Ordner fügst du in den Einstellungen unter „Konten“ hinzu.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -182,8 +228,7 @@ struct PopoverView: View {
                         .background(Circle().fill(Color.accentColor))
                     Text(name)
                         .font(.system(size: 11.5, weight: .semibold))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.horizontal, 4)
             }
@@ -218,11 +263,7 @@ struct PopoverView: View {
 }
 
 private struct TabButton: View {
-    static let maxLabelLength = 12
-
     let title: String
-    /// Kontobezeichnung, nur bei mehreren Konten eines Anbieters.
-    var label: String?
     let severity: Severity?
     let isActive: Bool
     let action: () -> Void
@@ -234,12 +275,6 @@ private struct TabButton: View {
                     .fill(severity?.color ?? Color.secondary.opacity(0.4))
                     .frame(width: 5, height: 5)
                 Text(title)
-                if let label {
-                    Text(label.count > Self.maxLabelLength ? String(label.prefix(Self.maxLabelLength - 1)) + "…" : label)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, -1)
-                }
             }
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(isActive ? .primary : .secondary)
@@ -252,6 +287,40 @@ private struct TabButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Ein Konto in der Kontoleiste: Zustandspunkt und Bezeichnung, ungekürzt. Ein Konto mit
+/// Fehler und ohne Stand ist grau und trägt ein „!“ (SPEC §6, Entwurf 27.11.2026).
+private struct AccountChip: View {
+    let label: String
+    let severity: Severity?
+    let hasProblem: Bool
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(hasProblem ? Color.secondary.opacity(0.4) : severity?.color ?? Color.secondary.opacity(0.4))
+                    .frame(width: 6, height: 6)
+                Text(label)
+                    .fixedSize(horizontal: false, vertical: true)
+                if hasProblem {
+                    Text("!").fontWeight(.bold)
+                }
+            }
+            .font(.system(size: 11.5, weight: isSelected ? .semibold : .regular))
+            .foregroundStyle(hasProblem ? .secondary : isSelected ? .primary : .secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(RoundedRectangle(cornerRadius: 6).fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(isSelected ? Color.accentColor : Color.secondary.opacity(0.3)))
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .help(hasProblem ? "\(label): Fehler, Details auf der Seite" : label)
     }
 }
 
@@ -320,17 +389,20 @@ private struct ProviderPage: View {
     let title: String
     let page: Page
     let state: UsageStore.ProviderState
+    /// Satz, warum das Konto nicht abgefragt werden kann (Ordner fehlt, keine Anmeldung).
+    let problem: String?
     let isLoading: Bool
     let consumption: ConsumptionStore
     let showMoney: Bool
     /// Abo-Preis aller Konten des Anbieters.
     let subscription: Int?
     let accountCount: Int
+    let openSettings: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 8) {
-                Text(title).font(.system(size: 13, weight: .bold)).lineLimit(1)
+                Text(title).font(.system(size: 13, weight: .bold)).fixedSize(horizontal: false, vertical: true)
                 if page == .usage, accountCount > 1 {
                     Text("\(accountCount) Konten").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                 } else if let plan = state.snapshot?.account?.plan {
@@ -366,7 +438,23 @@ private struct ProviderPage: View {
 
     @ViewBuilder
     private var limits: some View {
+        if let problem {
+            Label(problem, systemImage: "exclamationmark.triangle")
+                .font(.system(size: 11))
+                .foregroundStyle(Severity.crit.color)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Einstellungen öffnen", action: openSettings)
+        } else {
+            limitsContent
+        }
+    }
+
+    @ViewBuilder
+    private var limitsContent: some View {
             StatusLine(state: state)
+            if state.snapshot == nil, state.error != nil, !state.isRateLimited {
+                Button("Einstellungen öffnen", action: openSettings)
+            }
 
             if let snapshot = state.snapshot {
                 VStack(spacing: 18) {

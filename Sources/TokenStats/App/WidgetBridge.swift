@@ -54,7 +54,7 @@ final class WidgetBridge {
                 name: store.title(for: provider),
                 snapshot: state?.snapshot,
                 isRateLimited: state?.isRateLimited ?? false,
-                message: state?.error ?? state?.note,
+                message: store.problem(for: provider) ?? state?.error ?? state?.note,
                 kind: provider.kind,
                 kindName: provider.displayName
             )
@@ -66,8 +66,26 @@ final class WidgetBridge {
         }
         // cloudSync wird hier gelesen, damit ein Umschalten den Stand sofort überträgt.
         return WidgetSnapshot(machine: settings.cloudSync ? Host.current().localizedName : nil,
-                              showMoney: settings.showMoney, providers: providers, usage: usage)
+                              showMoney: settings.showMoney, providers: providers, usage: usage,
+                              accountNames: accountNames())
     }
+
+    /// Letzte bekannte Titel aller Konten, auch ausgeblendeter und entfernter: Die Widget-Auswahl
+    /// nennt ein verschwundenes Konto damit beim Namen („Claude · Kunde A“, „nicht mehr da“)
+    /// statt mit `claude@…`. Nur Titel, keine Pfade oder Adressen; wird nie gekürzt, nur ergänzt.
+    private func accountNames() -> [String: String] {
+        var names = UserDefaults.standard.dictionary(forKey: Self.accountNamesKey) as? [String: String] ?? [:]
+        let known = store.providers
+        for provider in known {
+            let several = known.filter { $0.kind == provider.kind }.count > 1
+            names[provider.id] = several
+                ? store.label(for: provider).map { "\(provider.displayName) · \($0)" } ?? provider.displayName
+                : provider.displayName
+        }
+        return names
+    }
+
+    private static let accountNamesKey = "widgetAccountNames"
 
     /// Kurz sammeln: Mehrere Anbieter antworten oft innerhalb weniger Sekunden.
     private func schedule(_ snapshot: WidgetSnapshot) {
@@ -81,11 +99,12 @@ final class WidgetBridge {
 
     private func write(_ snapshot: WidgetSnapshot) {
         if let last = lastWritten, last.providers == snapshot.providers, last.usage == snapshot.usage,
-           last.showMoney == snapshot.showMoney, last.machine == snapshot.machine {
+           last.showMoney == snapshot.showMoney, last.machine == snapshot.machine, last.accountNames == snapshot.accountNames {
             return
         }
         do {
             try snapshot.write()
+            if !store.isDemo { UserDefaults.standard.set(snapshot.accountNames, forKey: Self.accountNamesKey) }
             #if DEBUG
             NSLog("Token Stats: Widget-Stand geschrieben (%d Anbieter, %d Verbrauchszeilen)", snapshot.providers.count, snapshot.usage.count)
             #endif

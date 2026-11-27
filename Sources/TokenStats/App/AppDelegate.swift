@@ -8,9 +8,9 @@ import TokenStatsCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settings = AppSettings()
     private lazy var store = UsageStore(
-        providers: AccountDiscovery(manualFolders: settings.accountFolders).providers(),
+        entries: AccountDiscovery(manualFolders: settings.accountFolders).entries(),
         settings: settings,
-        discover: { [settings] in AccountDiscovery(manualFolders: settings.accountFolders).providers() }
+        discover: { [settings] in AccountDiscovery(manualFolders: settings.accountFolders).entries() }
     )
     private lazy var consumption: ConsumptionStore = {
         let consumption = ConsumptionStore(settings: settings)

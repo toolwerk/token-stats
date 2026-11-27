@@ -97,8 +97,12 @@ import TokenStatsCore
         #expect(widget.providerName(kind: "claude") == "Claude")
         #expect(widget.tightest?.provider.id == "claude@03abf0ee")
 
+        #expect(widget.provider("claude@knappstes")?.id == "claude@03abf0ee", "eigener Eintrag „knappstes Konto“")
+
+        // Variante B (Sven, 27.11.2026): „claude“ ist das Standardkonto. Fehlt es, kein stiller Wechsel.
         let onlySecond = WidgetSnapshot(showMoney: true, providers: [widget.providers[1]], usage: [])
-        #expect(onlySecond.provider("claude")?.id == "claude@03abf0ee", "Anbieter-ID → knappstes Konto")
+        #expect(onlySecond.provider("claude") == nil)
+        #expect(onlySecond.provider("claude@knappstes")?.id == "claude@03abf0ee")
     }
 
     @MainActor @Test func tabsSortDefaultFirstAndTitleOnlyWithSeveralAccounts() {
@@ -120,4 +124,101 @@ import TokenStatsCore
         settings.hiddenAccounts = [second.id]
         #expect(store.title(for: ClaudeProvider()) == "Claude", "ein sichtbares Konto: keine Bezeichnung")
     }
+
+    // MARK: Fehlerzustände (Designer-Entwurf 27.11.2026, Review-Punkte 6–8)
+
+    @Test func missingManualFolderStaysListedAndRemovable() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let gone = home.appending(path: "Volumes/Daten/kunde-a")
+        let entries = AccountDiscovery(home: home, manualFolders: ["claude": [gone.path]]).entries(.claude)
+        let entry = try #require(entries.first { $0.provider.source.origin == .manual })
+        #expect(entry.status == .missingFolder)
+        #expect(!entry.provider.isInstalled())
+    }
+
+    @Test func duplicateFoldersAndLoginsAreMarkedNotDropped() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let detected = try claudeFolder(home, ".claude-2", uuid: "u-2", email: "arbeit@example.com")
+        let copy = try claudeFolder(home, "elsewhere/claude-kopie", uuid: "u-2", email: "arbeit@example.com")
+
+        let entries = AccountDiscovery(home: home, manualFolders: ["claude": [copy.path, detected.path]]).entries(.claude)
+        let first = try #require(entries.first { $0.provider.source.origin == .detected })
+        let duplicates = entries.filter(\.isDuplicate)
+        #expect(duplicates.count == 2, "gleiche Anmeldung und gleicher Ordner")
+        #expect(duplicates.allSatisfy { $0.status == .duplicate(of: first.id) })
+        #expect(duplicates.allSatisfy { $0.provider.source.origin == .manual }, "beide lassen sich entfernen")
+        #expect(AccountDiscovery(home: home, manualFolders: ["claude": [copy.path]]).accounts(.claude).count == 2,
+                "abgefragt wird nur der erste")
+    }
+
+    @Test func manualFolderWithoutLoginIsNotSignedIn() throws {
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let empty = home.appending(path: "codex-leer")
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        let entries = AccountDiscovery(home: home, manualFolders: ["codex": [empty.path]]).entries(.codex)
+        let entry = try #require(entries.first { $0.provider.source.origin == .manual })
+        #expect(entry.status == .notSignedIn)
+        #expect(!entry.provider.isInstalled(), "Codex ohne auth.json wird nicht abgefragt")
+    }
+
+    @MainActor @Test func storeShowsProblemAccountsButPollsOnlyInstalled() throws {
+        let settings = AppSettings()
+        let previousHidden = settings.hiddenAccounts
+        defer { settings.hiddenAccounts = previousHidden }
+        settings.hiddenAccounts = []
+        let home = try makeHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let gone = CodexProvider(home: home.appending(path: "fehlt"), origin: .manual)
+        let empty = home.appending(path: "codex-leer")
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        let unsigned = CodexProvider(home: empty, origin: .manual)
+        let store = UsageStore(entries: [
+            AccountEntry(provider: gone, status: .missingFolder),
+            AccountEntry(provider: unsigned, status: .notSignedIn),
+            AccountEntry(provider: CodexProvider(home: empty.appending(path: "x"), origin: .manual), status: .duplicate(of: unsigned.id)),
+        ], settings: settings)
+        #expect(Set(store.visibleProviders.map(\.id)) == [gone.id, unsigned.id], "Fehlerkonten bleiben sichtbar, Doppelte nicht")
+        #expect(store.installedProviders.isEmpty, "nichts davon wird abgefragt")
+        #expect(store.problem(for: gone)?.hasPrefix("Ordner nicht gefunden: ") == true)
+        #expect(store.problem(for: unsigned)?.contains("CODEX_HOME=") == true)
+        #expect(store.hasProblem(gone))
+    }
+
+    @MainActor @Test func labelIsLimitedTo24Characters() {
+        let settings = AppSettings()
+        let previous = settings.accountLabels
+        defer { settings.accountLabels = previous }
+        let store = UsageStore(providers: [], settings: settings)
+        store.setLabel("claude@test0001", "  Hausverwaltung Lindenhof GmbH  ")
+        #expect(settings.accountLabels["claude@test0001"] == "Hausverwaltung Lindenhof")
+        #expect(settings.accountLabels["claude@test0001"]?.count == AccountSource.maxLabelLength)
+        store.setLabel("claude@test0001", " ")
+        #expect(settings.accountLabels["claude@test0001"] == nil, "leer = automatische Bezeichnung")
+    }
+
+    @Test func automaticLabelNamesItsSource() {
+        #expect(AccountSource(email: "privat@example.com").automaticLabelSource == "aus der E-Mail")
+        #expect(AccountSource(name: "Privat").automaticLabelSource == "aus dem Kontonamen")
+        #expect(AccountSource(folder: URL(filePath: "/tmp/.claude-2")).automaticLabelSource == "aus dem Ordnernamen")
+    }
+
+    #if DEBUG
+    @MainActor @Test func demoAccountsNeverTouchRealAccounts() {
+        let settings = AppSettings()
+        let store = UsageStore(providers: [], settings: settings)
+        let demo = DemoAccountProvider.scenario(.invalid, now: .now)
+        let before = (settings.accountLabels, settings.hiddenAccounts)
+        store.showDemo(demo.snapshots, entries: demo.entries, errors: demo.errors, hidden: demo.hidden, labels: demo.labels)
+        #expect(store.sortedProviders.allSatisfy { $0 is DemoAccountProvider })
+        #expect(store.sortedProviders.contains { $0.id == "claude@e5f6a7b8" }, "Ordner fehlt, bleibt sichtbar")
+        #expect(!store.sortedProviders.contains { $0.id == "claude@d00dfeed" }, "doppelte Anmeldung")
+        store.setLabel("claude", "Umbenannt")
+        store.setHidden("codex", true)
+        #expect(store.provider(id: "claude").flatMap(store.label(for:)) == "Umbenannt")
+        #expect(settings.accountLabels == before.0 && settings.hiddenAccounts == before.1, "Demo schreibt nichts in die Einstellungen")
+    }
+    #endif
 }
