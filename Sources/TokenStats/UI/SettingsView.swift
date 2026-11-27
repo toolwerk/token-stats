@@ -242,13 +242,24 @@ private struct AccountsSection: View {
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Toggle(isOn: visibility(provider)) {
+                        if missing {
+                            // Deaktivierte Checkbox ohne Haken; der Name daneben bleibt in Primärfarbe
+                            // lesbar (ausgegraut hätte er nur etwa 2:1 Kontrast).
+                            Toggle("Anzeigen", isOn: visibility(provider))
+                                .toggleStyle(.checkbox)
+                                .labelsHidden()
+                                .disabled(true)
                             Text(store.label(for: provider) ?? provider.displayName)
+                                .foregroundStyle(.primary)
                                 .fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            Toggle(isOn: visibility(provider)) {
+                                Text(store.label(for: provider) ?? provider.displayName)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .toggleStyle(.checkbox)
+                            .help("Anzeigen")
                         }
-                        .toggleStyle(.checkbox)
-                        .help("Anzeigen")
-                        .disabled(missing)
                         badge(provider.source.origin.badge)
                     }
                     Spacer(minLength: 8)
@@ -271,7 +282,7 @@ private struct AccountsSection: View {
             .padding(.leading, 20)
             switch entry.status {
             case .missingFolder:
-                notice("exclamationmark.triangle", "Ordner nicht gefunden. Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.", Severity.crit.color)
+                notice("exclamationmark.triangle", UsageStore.missingFolderHint(hidden: store.isHidden(provider.id)), Severity.crit.color)
                     .padding(.leading, 20)
             case .notSignedIn:
                 notice("exclamationmark.triangle", "Keine Anmeldung in diesem Ordner. Im Terminal »\(kind.signInCommand(folder: folderText(provider, kind: kind)))« starten.", Severity.warn.color)

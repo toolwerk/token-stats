@@ -293,18 +293,48 @@ private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
+/// Kurzmeter (Entwurf „Widgets einheitlich“ §3): eine Zeile, 14 pt – Name, 4-pt-Balken mit
+/// Pace-Marke, Prozent in 38 pt. Letzte Stufe vor „nur Kopf“ im kleinen und mittleren Widget.
+struct ShortMeter: View {
+    let window: LimitWindow
+    let now: Date
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(window.name).font(.system(size: 11, weight: .semibold)).lineLimit(1).fixedSize()
+            MeterBar(percent: window.percent, elapsed: window.elapsedFraction(now: now), color: window.severity.color)
+                .frame(height: 4)
+            Text(Format.percent(window.percent))
+                .font(.system(size: 11, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(window.severity.color)
+                .lineLimit(1)
+                .fixedSize()
+                .frame(width: 38, alignment: .trailing)
+        }
+        .frame(height: 14)
+    }
+}
+
 /// „work · vor 12 Min.“ – nur für Stände, die über iCloud von einem Mac kamen.
 struct MachineFooter: View {
     let snapshot: WidgetSnapshot
 
     var body: some View {
         if let machine = snapshot.machine {
-            (Text(machine) + Text(" · vor ") + Text(snapshot.writtenAt, style: .relative))
-                .font(.system(size: 9.5))
-                .foregroundStyle(.secondary)
-                // Umbrechen statt kürzen: In der kleinen Kachel stand sonst „vor 12 Min., 0…“
-                // (Designer-Prüfung PR #5, Runde 10, Bild mit Fußzeile).
-                .fixedSize(horizontal: false, vertical: true)
+            // Eine Zeile, wenn sie passt; sonst am „·“ gebrochen („Büro-Mac“ / „vor 12 Min., 0 Sek.“),
+            // nie gekürzt (Designer-Prüfung PR #5, Runden 10 und 11).
+            ViewThatFits(in: .horizontal) {
+                (Text(machine) + Text(" · vor ") + Text(snapshot.writtenAt, style: .relative))
+                    .lineLimit(1)
+                    .fixedSize()
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(machine).fixedSize(horizontal: false, vertical: true)
+                    (Text("vor ") + Text(snapshot.writtenAt, style: .relative)).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .font(.system(size: 9.5))
+            .foregroundStyle(.secondary)
         }
     }
 }
@@ -548,11 +578,17 @@ public struct LimitsWidgetView: View {
                     // Passt nicht jedes Limit (langer Kontoname, kleine Kachel), lieber eins weniger
                     // als ein abgeschnittenes – gezeigt werden dann die knappsten.
                     let most = min(windows.count, size == .medium ? 4 : 2)
+                    // Stufen: volle Meter (alle … einer), dann Kurzmeter (eine Zeile je Limit, Entwurf
+                    // §3/§4.3), zuletzt nur der Kopf mit „+N Limits“ – lieber ein Kurzmeter als keiner,
+                    // und lieber keiner als ein abgeschnittener (Designer-Prüfung PR #5, Runde 11).
+                    let stages = (1...max(most, 1)).reversed().map { (count: $0, short: false) }
+                        + (1...max(most, 1)).reversed().map { (count: $0, short: true) }
+                        + [(count: 0, short: false)]
                     ViewThatFits(in: .vertical) {
-                        // Zuletzt nur der Kopf mit „+N Limits“ – lieber kein Meter als ein abgeschnittener.
-                        ForEach(Array((0...max(most, 1)).reversed()), id: \.self) { count in
+                        ForEach(stages.indices, id: \.self) { index in
                             VStack(alignment: .leading, spacing: 8) {
-                                section(shown, columns: size == .medium ? 2 : 1, maxWindows: count, compact: true)
+                                section(shown, columns: size == .medium ? 2 : 1, maxWindows: stages[index].count, compact: true,
+                                        short: stages[index].short)
                             }
                         }
                     }
@@ -646,7 +682,8 @@ public struct LimitsWidgetView: View {
     }
 
     @ViewBuilder
-    private func section(_ provider: WidgetSnapshot.Provider, columns: Int, maxWindows: Int, compact: Bool) -> some View {
+    private func section(_ provider: WidgetSnapshot.Provider, columns: Int, maxWindows: Int, compact: Bool,
+                         short: Bool = false) -> some View {
         // Ist kein Platz für alle, die knappsten – absteigend nach Prozent, bei Gleichstand in der
         // Reihenfolge der App (Sven, 27.11.); die übrigen stehen als „+N Limits“ im Kopf. Passen
         // alle, bleibt die Reihenfolge der App.
@@ -661,7 +698,11 @@ public struct LimitsWidgetView: View {
             severity: provider.snapshot?.tightestWindow?.severity,
             selection: size == .large ? nil : selectionDetail
         )
-        if columns == 1 {
+        if short {
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(windows) { ShortMeter(window: $0, now: now) }
+            }
+        } else if columns == 1 {
             ForEach(windows) { MeterRow(window: $0, compact: compact, showScope: showScope, stackDetails: true, now: now) }
         } else {
             let rows = stride(from: 0, to: windows.count, by: columns).map { Array(windows[$0..<min($0 + columns, windows.count)]) }

@@ -37,7 +37,11 @@ struct Screenshots {
     func showDemo(now: Date = .now) {
         if let scenario = Self.accountScenario {
             let demo = DemoAccountProvider.scenario(scenario, now: now)
-            store.showDemo(demo.snapshots, entries: demo.entries, errors: demo.errors, hidden: demo.hidden, labels: demo.labels)
+            // TOKENSTATS_DEMO_HIDDEN=<id,id> blendet für Bilder weitere Demo-Konten aus.
+            let extraHidden = (ProcessInfo.processInfo.environment["TOKENSTATS_DEMO_HIDDEN"] ?? "")
+                .split(separator: ",").map(String.init)
+            store.showDemo(demo.snapshots, entries: demo.entries, errors: demo.errors,
+                           hidden: demo.hidden.union(extraHidden), labels: demo.labels)
         } else {
             store.showDemo(Self.demoSnapshots(now: now))
         }

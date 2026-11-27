@@ -133,10 +133,12 @@ final class UsageStore {
         }
     }
 
-    /// Einrichtungsfehler (Ordner fehlt, keine Anmeldung im Ordner): Nur dann bietet das
-    /// Popover „Einstellungen öffnen“ an, nicht bei Abruffehlern (Sven, Antwort zu PR #5).
-    func needsSetup(_ provider: any UsageProvider) -> Bool {
-        problem(for: provider) != nil
+    /// Hinweis in den Einstellungen bei fehlendem Ordner, je nach Zustand (Designer-Prüfung
+    /// PR #5, Runde 11). Gleiche Sätze wie `AccountEntry.MissingFolderHint` unter Windows.
+    nonisolated static func missingFolderHint(hidden: Bool) -> String {
+        hidden
+            ? "Ordner nicht gefunden. Das Konto ist ausgeblendet."
+            : "Ordner nicht gefunden. Das Konto steht grau im Menü. Ist das Laufwerk eingehängt, wird es wieder abgefragt."
     }
 
     /// Haken der Checkbox „Anzeigen“: Fehlt der Ordner, bleibt sie leer (Sven, Antwort zu PR #5),

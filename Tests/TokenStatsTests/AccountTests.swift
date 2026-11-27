@@ -280,7 +280,14 @@ import TokenStatsCore
         #expect(store.showsAsChecked(ok))
         settings.hiddenAccounts = [ok.id]
         #expect(!store.showsAsChecked(ok), "ausgeblendet: kein Haken")
-        #expect(store.needsSetup(gone), "Einrichtungsfehler: „Einstellungen öffnen“")
-        #expect(!store.needsSetup(ok), "kein Einrichtungsfehler – auch ein Abruffehler zeigt keinen Knopf")
+        // „Einstellungen öffnen“ hängt am Einrichtungsfehler (`problem`), nicht am Abruffehler.
+        #expect(store.problem(for: gone) != nil, "Einrichtungsfehler: „Einstellungen öffnen“")
+        #expect(store.problem(for: ok) == nil, "kein Einrichtungsfehler – auch ein Abruffehler zeigt keinen Knopf")
+    }
+
+    @Test func missingFolderHintDependsOnHidden() {
+        #expect(UsageStore.missingFolderHint(hidden: false)
+            == "Ordner nicht gefunden. Das Konto steht grau im Menü. Ist das Laufwerk eingehängt, wird es wieder abgefragt.")
+        #expect(UsageStore.missingFolderHint(hidden: true) == "Ordner nicht gefunden. Das Konto ist ausgeblendet.")
     }
 }
