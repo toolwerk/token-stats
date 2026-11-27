@@ -27,21 +27,33 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
     public static let currentVersion = 1
     public static let fileName = "widgets.json"
 
+    /// Ein Konto eines Anbieters (SPEC §6 „Mehrere Konten“); bei einem Konto je Anbieter
+    /// ist `id` die Anbieter-ID, sonst `claude@<hash>`.
     public struct Provider: Codable, Equatable, Sendable, Identifiable {
         public var id: String
+        /// Titel wie im Tab: „Claude“ oder „Claude · frank“.
         public var name: String
         public var snapshot: ProviderSnapshot?
         public var isRateLimited: Bool
         /// Fehler oder Hinweis der App, z. B. „Anmeldung abgelaufen“.
         public var message: String?
+        /// Anbieter-ID und -Name; fehlen in Dateien von vor den Konten, dann gilt `id` bzw. `name`.
+        public var kind: String?
+        public var kindName: String?
 
-        public init(id: String, name: String, snapshot: ProviderSnapshot?, isRateLimited: Bool = false, message: String? = nil) {
+        public init(id: String, name: String, snapshot: ProviderSnapshot?, isRateLimited: Bool = false, message: String? = nil,
+                    kind: String? = nil, kindName: String? = nil) {
             self.id = id
             self.name = name
             self.snapshot = snapshot
             self.isRateLimited = isRateLimited
             self.message = message
+            self.kind = kind
+            self.kindName = kindName
         }
+
+        public var providerKind: String { kind ?? id }
+        public var providerName: String { kindName ?? name }
     }
 
     public struct Usage: Codable, Equatable, Sendable {
@@ -77,8 +89,16 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
 
     // MARK: Abfragen
 
+    /// Das Konto mit dieser ID – oder, bei einer Anbieter-ID, das knappste Konto des Anbieters.
     public func provider(_ id: String) -> Provider? {
-        providers.first { $0.id == id }
+        if let exact = providers.first(where: { $0.id == id }) { return exact }
+        let ofKind = providers.filter { $0.providerKind == id }
+        return ofKind.max { ($0.snapshot?.tightestWindow?.percent ?? -1) < ($1.snapshot?.tightestWindow?.percent ?? -1) }
+    }
+
+    /// Anzeigename eines Anbieters ohne Konto, für den Verbrauch.
+    public func providerName(kind: String) -> String? {
+        providers.first { $0.providerKind == kind }?.providerName
     }
 
     /// Das knappste Limit über alle Anbieter.

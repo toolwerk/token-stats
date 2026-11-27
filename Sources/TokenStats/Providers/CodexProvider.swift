@@ -4,14 +4,50 @@ import TokenStatsCore
 /// Codex: OAuth-Token aus `~/.codex/auth.json` → `chatgpt.com/backend-api/wham/usage`.
 /// Wie bei Claude wird das Token nur gelesen, nie erneuert – das übernimmt die Codex-CLI.
 struct CodexProvider: UsageProvider {
-    let id = "codex"
+    let kind = "codex"
     let displayName = "Codex"
+    let source: AccountSource
 
     static let usageURL = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
     static let hint = "Codex einmal starten oder »codex login«."
 
-    private var authFile: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appending(path: ".codex/auth.json")
+    /// `home` = `CODEX_HOME` eines weiteren Kontos; `nil` = Standardkonto `~/.codex`.
+    init(home: URL? = nil, origin: AccountSource.Origin = .detected) {
+        let folder = home?.standardizedFileURL
+        var source = AccountSource(folder: folder, origin: folder == nil ? .standard : origin)
+        let file = (folder ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".codex")).appending(path: "auth.json")
+        if let data = try? Data(contentsOf: file), let account = Self.parseAccount(data) {
+            source.identity = account.id
+            source.email = account.email
+        }
+        self.source = source
+    }
+
+    var id: String {
+        guard let folder = source.folder else { return kind }
+        return "\(kind)@\(FolderHash.of(folder.path))"
+    }
+
+    /// Ordner dieses Kontos; Logs liegen in `sessions` und `archived_sessions`.
+    var homeDirectory: URL {
+        source.folder ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".codex")
+    }
+
+    private var authFile: URL { homeDirectory.appending(path: "auth.json") }
+
+    private var loginHint: String {
+        guard let folder = source.folderDisplay else { return Self.hint }
+        return "»CODEX_HOME=\(folder) codex« einmal starten oder »… codex login«."
+    }
+
+    /// Kontokennung und E-Mail aus `auth.json` – für Bezeichnung und doppelte Anmeldungen.
+    static func parseAccount(_ data: Data) -> (id: String?, email: String?)? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tokens = root["tokens"] as? [String: Any]
+        else { return nil }
+        let id = (tokens["account_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        let email = (tokens["id_token"] as? String).flatMap(JWT.payload)?["email"] as? String
+        return (id, email)
     }
 
     func isInstalled() -> Bool {
@@ -23,17 +59,17 @@ struct CodexProvider: UsageProvider {
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tokens = root["tokens"] as? [String: Any],
               let accessToken = tokens["access_token"] as? String, !accessToken.isEmpty
-        else { throw ProviderError.notLoggedIn(hint: Self.hint) }
+        else { throw ProviderError.notLoggedIn(hint: loginHint) }
 
         if let exp = JWT.payload(accessToken)?["exp"] as? Double, Date(timeIntervalSince1970: exp) < .now {
-            throw ProviderError.tokenExpired(hint: Self.hint)
+            throw ProviderError.tokenExpired(hint: loginHint)
         }
 
         var headers = ["Authorization": "Bearer \(accessToken)"]
         if let accountID = tokens["account_id"] as? String, !accountID.isEmpty {
             headers["chatgpt-account-id"] = accountID
         }
-        let response = try await HTTP.getJSON(Self.usageURL, headers: headers, expiredHint: Self.hint)
+        let response = try await HTTP.getJSON(Self.usageURL, headers: headers, expiredHint: loginHint)
         var snapshot = try Self.parse(response)
 
         let claims = (tokens["id_token"] as? String).flatMap(JWT.payload)

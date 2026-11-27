@@ -8,6 +8,8 @@ struct UsageView: View {
     let consumption: ConsumptionStore
     let showMoney: Bool
     let subscription: Int?
+    /// Sichtbare Konten des Anbieters; ab zwei sagt die Fußnote, dass alle zusammen zählen.
+    var accountCount: Int = 1
 
     @State private var period: UsagePeriod = .week
     @State private var copied = false
@@ -136,7 +138,9 @@ struct UsageView: View {
     }
 
     private func footnote(_ summary: UsageSummary) -> String {
-        var text = "Tokenzahlen aus den Session-Logs dieses Macs – Nutzung auf anderen Geräten fehlt"
+        var text = accountCount > 1
+            ? "Tokenzahlen aus den Session-Logs aller \(accountCount) Konten dieses Macs zusammen – die Logs nennen kein Konto; Nutzung auf anderen Geräten fehlt"
+            : "Tokenzahlen aus den Session-Logs dieses Macs – Nutzung auf anderen Geräten fehlt"
         if showMoney {
             let asOf = consumption.prices.asOf.map { " (Stand \($0.formatted(.dateTime.month(.twoDigits).year().locale(Format.locale))))" } ?? ""
             text += " × Listenpreis\(asOf), inkl. Cache-Tarife. Keine Abrechnungsdaten – nur, was derselbe Verbrauch über die API gekostet hätte."

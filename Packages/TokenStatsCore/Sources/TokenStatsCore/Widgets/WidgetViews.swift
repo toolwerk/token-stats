@@ -85,7 +85,7 @@ public struct UsageWidgetView: View {
     }
 
     private var title: String {
-        provider.flatMap { snapshot?.provider($0)?.name } ?? "Verbrauch"
+        provider.flatMap { snapshot?.providerName(kind: $0) } ?? "Verbrauch"
     }
 
     @ViewBuilder

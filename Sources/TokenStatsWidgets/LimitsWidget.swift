@@ -5,23 +5,49 @@ import WidgetKit
 
 // MARK: Konfiguration
 
-enum LimitsProviderOption: String, AppEnum {
-    case tightest, antigravity, claude, codex, ollama
+/// Konto für das Widget „Limits“, dynamisch aus dem Widget-Stand: „Knappstes Limit“ und je
+/// Konto ein Eintrag („Claude · frank“). Die IDs der Standardkonten (`claude`) sind dieselben
+/// wie die des früheren Anbieter-Enums (SPEC §6 „Mehrere Konten“).
+struct LimitsAccountEntity: AppEntity {
+    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Konto"
+    static let defaultQuery = LimitsAccountQuery()
+    static let tightest = LimitsAccountEntity(id: "tightest", name: "Knappstes Limit")
 
-    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Anbieter")
-    static let caseDisplayRepresentations: [LimitsProviderOption: DisplayRepresentation] = [
-        .tightest: "Knappstes Limit", .antigravity: "Antigravity", .claude: "Claude", .codex: "Codex", .ollama: "Ollama",
-    ]
+    let id: String
+    let name: String
 
-    var providerID: String? { self == .tightest ? nil : rawValue }
+    var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(name)") }
+
+    /// `nil` = knappstes Limit über alle Konten.
+    var providerID: String? { id == Self.tightest.id ? nil : id }
+}
+
+struct LimitsAccountQuery: EntityQuery {
+    /// Ohne Widget-Stand (ad hoc signierter Build): die bekannten Anbieter.
+    private static let fallback = [("antigravity", "Antigravity"), ("claude", "Claude"), ("codex", "Codex"), ("ollama", "Ollama")]
+
+    func entities(for identifiers: [String]) async throws -> [LimitsAccountEntity] {
+        let all = Self.all()
+        // Unbekannte IDs behalten (Konto gerade ausgeblendet): Die Auswahl soll nicht verloren gehen.
+        return identifiers.map { id in all.first { $0.id == id } ?? LimitsAccountEntity(id: id, name: id) }
+    }
+
+    func suggestedEntities() async throws -> [LimitsAccountEntity] { Self.all() }
+
+    func defaultResult() async -> LimitsAccountEntity? { .tightest }
+
+    private static func all() -> [LimitsAccountEntity] {
+        let accounts = WidgetSnapshot.loadForWidgets()?.providers.map { LimitsAccountEntity(id: $0.id, name: $0.name) }
+        return [.tightest] + ((accounts?.isEmpty == false ? accounts : nil) ?? fallback.map { LimitsAccountEntity(id: $0.0, name: $0.1) })
+    }
 }
 
 struct LimitsConfigurationIntent: WidgetConfigurationIntent {
     static let title: LocalizedStringResource = "Limits"
     static let description = IntentDescription("Session- und Wochenlimit mit Pace-Marke aus Token Stats.")
 
-    @Parameter(title: "Anbieter", default: .tightest)
-    var provider: LimitsProviderOption
+    @Parameter(title: "Konto")
+    var provider: LimitsAccountEntity?
 }
 
 // MARK: Timeline
@@ -39,11 +65,11 @@ struct LimitsTimelineProvider: AppIntentTimelineProvider {
 
     func snapshot(for configuration: LimitsConfigurationIntent, in context: Context) async -> LimitsEntry {
         let snapshot = context.isPreview ? DemoData.widgetSnapshot(now: .now) : WidgetSnapshot.loadForWidgets()
-        return LimitsEntry(date: .now, snapshot: snapshot, provider: configuration.provider.providerID)
+        return LimitsEntry(date: .now, snapshot: snapshot, provider: configuration.provider?.providerID)
     }
 
     func timeline(for configuration: LimitsConfigurationIntent, in context: Context) async -> Timeline<LimitsEntry> {
-        let entry = LimitsEntry(date: .now, snapshot: WidgetSnapshot.loadForWidgets(), provider: configuration.provider.providerID)
+        let entry = LimitsEntry(date: .now, snapshot: WidgetSnapshot.loadForWidgets(), provider: configuration.provider?.providerID)
         return Timeline(entries: [entry], policy: .never)
     }
 }

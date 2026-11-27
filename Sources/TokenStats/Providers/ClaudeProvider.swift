@@ -2,7 +2,8 @@ import Foundation
 import TokenStatsCore
 
 /// Claude Code: OAuth-Token aus Schlüsselbund bzw. `~/.claude/.credentials.json`
-/// → `api.anthropic.com/api/oauth/usage`.
+/// → `api.anthropic.com/api/oauth/usage`. Weitere Konten über `CLAUDE_CONFIG_DIR`:
+/// Dienst `Claude Code-credentials-<hash>`, Datei `<ordner>/.credentials.json`.
 ///
 /// Das Token wird nur gelesen und nie erneuert: Ein Refresh rotiert das
 /// Refresh-Token, und ohne Zurückschreiben wäre Claude Code danach abgemeldet.
@@ -10,30 +11,75 @@ import TokenStatsCore
 /// Die Desktop-App meldet ihre Claude-Code-Sitzungen über eigene Zugangsdaten an und
 /// lässt diesen Eintrag liegen (Token lebt 8 h).
 struct ClaudeProvider: UsageProvider {
-    let id = "claude"
+    let kind = "claude"
     let displayName = "Claude"
+    let source: AccountSource
 
     static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
     static let keychainService = "Claude Code-credentials"
     static let hint = "»claude« im Terminal einmal starten – die Desktop-App erneuert dieses Token nicht."
     static let loginHint = "»claude auth login« im Terminal ausführen. Die Desktop-App hat eine eigene Anmeldung."
 
+    /// `configDirectory` = `CLAUDE_CONFIG_DIR` eines weiteren Kontos; `nil` = Standardkonto.
+    init(configDirectory: URL? = nil, origin: AccountSource.Origin = .detected) {
+        let folder = configDirectory?.standardizedFileURL
+        var source = AccountSource(folder: folder, origin: folder == nil ? .standard : origin)
+        if let account = Self.readAccount(Self.globalConfig(folder)) {
+            source.identity = account.uuid
+            source.email = account.email
+            source.name = account.name
+        }
+        self.source = source
+    }
+
+    var id: String {
+        guard let folder = source.folder else { return kind }
+        return "\(kind)@\(FolderHash.of(folder.path))"
+    }
+
     private var home: URL { FileManager.default.homeDirectoryForCurrentUser }
-    private var credentialsFile: URL { home.appending(path: ".claude/.credentials.json") }
+    private var configDirectory: URL { source.folder ?? home.appending(path: ".claude") }
+    private var credentialsFile: URL { configDirectory.appending(path: ".credentials.json") }
+    /// Logs dieses Kontos, für die Verbrauchsseite.
+    var projectsDirectory: URL { configDirectory.appending(path: "projects") }
+
+    /// Mit `CLAUDE_CONFIG_DIR` hängt Claude Code den Hash des Ordnerpfads an den Dienst an.
+    /// Steht in der Variable ein Schrägstrich am Ende, ändert sich der Hash – beide probieren.
+    var keychainServices: [String] {
+        guard let folder = source.folder else { return [Self.keychainService] }
+        return [folder.path, folder.path + "/"].map { "\(Self.keychainService)-\(FolderHash.of($0))" }
+    }
+
+    /// `~/.claude.json` beim Standardkonto, sonst `<ordner>/.claude.json`.
+    static func globalConfig(_ folder: URL?) -> URL {
+        folder?.appending(path: ".claude.json")
+            ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude.json")
+    }
+
+    /// Hinweise nennen beim zweiten Konto den Ordner – ein schlichtes `claude` erneuert nur das Standardkonto.
+    private var refreshHint: String {
+        guard let folder = source.folderDisplay else { return Self.hint }
+        return "»CLAUDE_CONFIG_DIR=\(folder) claude« im Terminal einmal starten."
+    }
+
+    private var signInHint: String {
+        guard let folder = source.folderDisplay else { return Self.loginHint }
+        return "»CLAUDE_CONFIG_DIR=\(folder) claude auth login« im Terminal ausführen."
+    }
 
     func isInstalled() -> Bool {
-        FileManager.default.fileExists(atPath: home.appending(path: ".claude").path)
+        FileManager.default.fileExists(atPath: configDirectory.path)
     }
 
     func fetch() async throws -> ProviderSnapshot {
-        let keychain = Keychain.password(service: Self.keychainService)
+        let keychain = keychainServices.lazy.compactMap { Keychain.password(service: $0) }.first
         // Abgemeldet heißt abgemeldet: Die Datei ist dann nur ein veralteter Rest.
-        if let keychain, Self.isSignedOut(keychain) { throw ProviderError.notLoggedIn(hint: Self.loginHint) }
+        if let keychain, Self.isSignedOut(keychain) { throw ProviderError.notLoggedIn(hint: signInHint) }
         guard let credentials = loadCredentials(keychain: keychain) else {
-            throw ProviderError.notLoggedIn(hint: Self.loginHint)
+            throw ProviderError.notLoggedIn(hint: signInHint)
         }
         if let expiresAt = credentials.expiresAt, expiresAt < .now {
-            throw ProviderError.tokenExpired(hint: Self.hint)
+            throw ProviderError.tokenExpired(hint: refreshHint)
         }
         let data = try await HTTP.getJSON(
             Self.usageURL,
@@ -41,7 +87,7 @@ struct ClaudeProvider: UsageProvider {
                 "Authorization": "Bearer \(credentials.accessToken)",
                 "anthropic-beta": "oauth-2025-04-20",
             ],
-            expiredHint: Self.hint
+            expiredHint: refreshHint
         )
         var snapshot = try Self.parse(data)
         snapshot.account = AccountInfo(name: accountName(), plan: credentials.plan)
@@ -97,14 +143,32 @@ struct ClaudeProvider: UsageProvider {
         return name
     }
 
-    /// Anzeigename aus `~/.claude.json` (Kontodaten, keine Zugangsdaten).
+    /// Anzeigename aus `~/.claude.json` bzw. `<ordner>/.claude.json` (Kontodaten, keine Zugangsdaten).
     private func accountName() -> String? {
-        guard let data = try? Data(contentsOf: home.appending(path: ".claude.json")),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let account = Self.readAccount(Self.globalConfig(source.folder)) else { return nil }
+        let name = account.name ?? account.email
+        return name?.isEmpty == false ? name : nil
+    }
+
+    struct Account: Equatable {
+        var uuid: String?
+        var email: String?
+        var name: String?
+    }
+
+    static func readAccount(_ file: URL) -> Account? {
+        guard let data = try? Data(contentsOf: file) else { return nil }
+        return parseAccount(data)
+    }
+
+    static func parseAccount(_ data: Data) -> Account? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let account = root["oauthAccount"] as? [String: Any]
         else { return nil }
-        let name = (account["displayName"] as? String) ?? (account["emailAddress"] as? String)
-        return name?.isEmpty == false ? name : nil
+        func text(_ key: String) -> String? {
+            (account[key] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        }
+        return Account(uuid: text("accountUuid"), email: text("emailAddress"), name: text("displayName"))
     }
 
     // MARK: Antwort

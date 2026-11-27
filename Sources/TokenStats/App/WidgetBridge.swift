@@ -51,10 +51,12 @@ final class WidgetBridge {
             let state = store.states[provider.id]
             return WidgetSnapshot.Provider(
                 id: provider.id,
-                name: provider.displayName,
+                name: store.title(for: provider),
                 snapshot: state?.snapshot,
                 isRateLimited: state?.isRateLimited ?? false,
-                message: state?.error ?? state?.note
+                message: state?.error ?? state?.note,
+                kind: provider.kind,
+                kindName: provider.displayName
             )
         }
         let usage = ConsumptionStore.providers.flatMap { provider in

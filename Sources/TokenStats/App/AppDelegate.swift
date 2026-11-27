@@ -7,8 +7,16 @@ import TokenStatsCore
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settings = AppSettings()
-    private lazy var store = UsageStore(providers: [ClaudeProvider(), CodexProvider(), AntigravityProvider(), OllamaProvider()], settings: settings)
-    private lazy var consumption = ConsumptionStore(settings: settings)
+    private lazy var store = UsageStore(
+        providers: AccountDiscovery(manualFolders: settings.accountFolders).providers(),
+        settings: settings,
+        discover: { [settings] in AccountDiscovery(manualFolders: settings.accountFolders).providers() }
+    )
+    private lazy var consumption: ConsumptionStore = {
+        let consumption = ConsumptionStore(settings: settings)
+        consumption.roots = { [store] in store.logRoots }
+        return consumption
+    }()
     private lazy var widgets = WidgetBridge(store: store, consumption: consumption, settings: settings)
     private let updater = Updater()
 
