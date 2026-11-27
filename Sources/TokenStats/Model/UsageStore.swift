@@ -305,7 +305,8 @@ final class UsageStore {
     /// Nur für `make screenshots` und `TOKENSTATS_DEMO_ACCOUNTS`: fester Stand, ohne Abruf,
     /// ohne Erkennung und ohne den Cache zu überschreiben. Nie echte Konten.
     func showDemo(_ snapshots: [String: ProviderSnapshot], entries demoEntries: [AccountEntry]? = nil,
-                  errors: [String: String] = [:], hidden: Set<String> = [], labels: [String: String] = [:]) {
+                  errors: [String: String] = [:], hidden: Set<String> = [], labels: [String: String] = [:],
+                  retryAt: [String: Date] = [:]) {
         let standard: [any UsageProvider] = [ClaudeProvider(), CodexProvider(), AntigravityProvider(), OllamaProvider()]
         entries = demoEntries ?? standard.map { AccountEntry(provider: $0, status: .ok) }
         isDemo = true
@@ -313,6 +314,8 @@ final class UsageStore {
         demoLabels = labels
         states = snapshots.mapValues { ProviderState(snapshot: $0) }
         for (id, error) in errors { states[id, default: ProviderState()].error = error }
+        // Rate-Limit für Bilder („Abfrage pausiert …“), ohne Abfrage und ohne Cache
+        for (id, date) in retryAt { states[id, default: ProviderState()].retryAt = date }
     }
     #endif
 
