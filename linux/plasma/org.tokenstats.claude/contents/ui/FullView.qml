@@ -172,7 +172,9 @@ ColumnLayout {
             opacity: 0.7
             parts: {
                 var stand = view.updated ? "Stand " + Qt.formatTime(view.updated, "hh:mm") : "lädt …"
-                var warning = view.page === "limits" ? (view.acc && view.acc.errorParts ? view.acc.errorParts : [])
+                // ohne Stand steht der Hinweis schon im Inhalt (limitsPage), unten nicht noch einmal
+                var withValues = view.acc && view.acc.limits && view.acc.limits.length > 0
+                var warning = view.page === "limits" ? (withValues && view.acc.errorParts ? view.acc.errorParts : [])
                             : (view.info && view.info.error ? [{ kind: "text", text: view.info.error }] : [])
                 if (!warning.length) return [{ kind: "text", text: stand }]
                 var prefix = stand + "  ·  ⚠"

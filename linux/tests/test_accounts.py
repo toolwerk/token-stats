@@ -251,6 +251,8 @@ class ViewTest(unittest.TestCase):
                 with open(module.__file__) as f:
                     source = f.read()
                 self.assertIn('f"Server antwortet mit HTTP {e.code}."', source)
+        with open(os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "ui", "FullView.qml")) as f:
+            self.assertIn("withValues && view.acc.errorParts", f.read())   # Plasma: Fußzeile nur mit Stand
 
     def test_catalog_texts(self):
         for name, module in MODULES.items():
