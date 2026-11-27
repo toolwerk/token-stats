@@ -57,7 +57,7 @@ Roboter-Icon · „Token Stats“ · rechts der Seitenumschalter `Limits · Verb
 Das knappste Limit steht hier nicht mehr (Entscheidung 28.09.2026): Es ist schon in der
 Menüleiste sichtbar und in den Tab-Punkten; doppelt wirkte der Kopf überladen.
 
-### 3.2 Tab-Leiste — ein Tab je Konto
+### 3.2 Tab-Leiste — ein Tab je Anbieter
 `Antigravity · Claude · Codex · Copilot · +2`
 
 - Jeder Tab trägt einen 5-pt-Statuspunkt in der Zustandsfarbe. Damit ist der kritische
@@ -67,8 +67,9 @@ Menüleiste sichtbar und in den Tab-Punkten; doppelt wirkte der Kopf überladen.
   willkürlich. Dringlichkeit zeigen Statuspunkt und aktiver Tab.
 - Passen nicht alle Tabs in die Breite, sammelt `+n` den Rest in einem Menü.
 - Tabs statt langer Liste, weil die Popover-Höhe sonst mit jedem Anbieter wächst.
-- Mehrere Konten eines Anbieters: ein Tab je Konto, „Claude frank · Claude claude2“;
-  auf der Seite „Verbrauch“ ein Tab je Anbieter (§6 „Mehrere Konten je Anbieter“).
+- Mehrere Konten eines Anbieters: Die Anbieter-Tabs bleiben fest, darunter steht auf
+  „Limits“ eine umbrechende **Kontoleiste** (§6 „Mehrere Konten je Anbieter“). `+n` gilt nur
+  für Anbieter, nie für Konten; Konten verdrängen keinen Anbieter.
 
 ### 3.3 Seitenumschalter
 `Limits · Verbrauch` als schlanker Kapsel-Umschalter rechts in der Kopfzeile, gilt für
@@ -154,8 +155,9 @@ Eigenes Fenster, Abschnitt **Anzeige**:
 - Checkboxen: Zustandsfarbe im Icon verwenden · Eigenes Symbol pro Client ·
   API-Vergleichswert in Geld anzeigen · Bei Anmeldung starten
 
-Weitere Abschnitte: **Konten** (erkannte Konten je Anbieter, Bezeichnung, anzeigen
-an/aus, Ordner hinzufügen; §6 „Mehrere Konten je Anbieter“), **Anbieter** (je Client an/aus, Reihenfolge), **Mitteilungen**
+Weitere Abschnitte: **Konten** (erkannte Konten in Gruppen je Anbieter, beschriftete
+Checkbox „anzeigen“, Bezeichnung über den Stift, Fehler als Satz in der Zeile, Ordner
+hinzufügen und entfernen; §6 „Mehrere Konten je Anbieter“), **Anbieter** (je Client an/aus, Reihenfolge), **Mitteilungen**
 (Schwellen), **Aktualisierung** (Intervall, mindestens 300 s), **Updates** (automatisch
 suchen an/aus, „Jetzt suchen“, installierte Version, letzte Suche).
 
@@ -347,10 +349,23 @@ Tokens:
    Umgebungsvariablen helfen nicht, weil eine per Finder gestartete App die
    Shell-Umgebung nicht sieht.
 4. **Doppelte Anmeldungen** (zwei Ordner, dasselbe Konto, also gleiche `accountUuid` bzw.
-   ChatGPT-`account_id`) erscheinen nur einmal. Es gilt der zuerst gefundene Ordner in
-   der Reihenfolge Standard, automatisch, von Hand. Sonst zählten beide Abfragen gegen
-   dasselbe Rate-Limit, und die Zahlen stünden doppelt da.
-5. Die Erkennung läuft beim Start, bei jeder Änderung in den Einstellungen und höchstens
+   ChatGPT-`account_id`, oder derselbe echte Ordnerpfad) werden nur einmal abgefragt und
+   angezeigt. Es gilt der zuerst gefundene Ordner in der Reihenfolge Standard, automatisch,
+   von Hand. Sonst zählten beide Abfragen gegen dasselbe Rate-Limit, und die Zahlen stünden
+   doppelt da. Der zweite Ordner bleibt aber als Eintrag stehen (`AccountEntry`, Zustand
+   „doppelt“): Die Einstellungen sagen „… gehört zum selben Konto wie „Privat“ und wird
+   nicht doppelt gezeigt“, ein Ordner „von Hand“ lässt sich dort entfernen. Vorher wurde er
+   stumm verworfen – der Klick auf „Hinzufügen“ bewirkte scheinbar nichts, und der Pfad lag
+   unsichtbar in `accountFolders`.
+5. **Fehlende Ordner und fehlende Anmeldung** (nur Ordner „von Hand“): Fehlt der Ordner
+   (Laufwerk nicht eingehängt), bleibt das Konto mit „Ordner nicht gefunden …“ sichtbar –
+   in den Einstellungen mit „Entfernen“, im Popover grau mit „!“ – und wird nicht abgefragt.
+   Ist das Laufwerk wieder da, erscheint es von selbst wieder. Fehlt die Kontodatei, sagt
+   die Zeile „Keine Anmeldung in diesem Ordner“ samt Befehl (`CLAUDE_CONFIG_DIR=… claude`
+   bzw. `CODEX_HOME=… codex login`). Claude-Ordner ohne `.claude.json` werden trotzdem
+   abgefragt (die Anmeldung liegt im Schlüsselbund; ohne sie scheitert die Abfrage lokal,
+   ohne Anfrage), Codex ohne `auth.json` nicht.
+6. Die Erkennung läuft beim Start, bei jeder Änderung in den Einstellungen und höchstens
    einmal pro Minute im Abfragetakt. Ein neu angelegtes Konto erscheint also ohne
    Neustart.
 
@@ -362,17 +377,28 @@ ist der Hash zugleich das Suffix des Schlüsselbund-Dienstes.
 
 **Bezeichnung.** Die eigene aus den Einstellungen, sonst der lokale Teil der E-Mail
 (`frank` aus `frank@…`), sonst der Anzeigename, sonst der Ordnername (`claude-2`). Hat ein
-Anbieter nur ein Konto, steht wie bisher nur „Claude“.
+Anbieter nur ein Konto, steht wie bisher nur „Claude“. Eigene Bezeichnungen haben
+**höchstens 24 Zeichen** (Sven, 27.11.2026): Die Grenze gilt bei der Eingabe, angezeigt wird
+nie gekürzt – nirgends Auslassungspunkte, lange Namen brechen um. So braucht ein Name im
+Widget höchstens zwei Titelzeilen.
 
 **Anzeige.**
 
-- **Tabs:** ein Tab je Konto. Sortiert wird alphabetisch nach Anbieter, innerhalb eines
-  Anbieters das Standardkonto zuerst, dann nach Bezeichnung. Die Reihenfolge springt also
-  nicht (§3.2). Die Bezeichnung steht leiser hinter dem Anbieternamen („Claude frank“).
-  Wie viele Tabs sichtbar sind, richtet sich nach der gemessenen Textbreite statt nach
-  der festen Zahl 4; der Rest landet wie bisher in `+n`.
-- **Kopfzeile des Tabs:** „Claude · frank“, Plan, Zustands-Chip. Die Fußzeile nennt
-  weiter den Kontonamen.
+- **Tabs und Kontoleiste** (Designer-Entwurf 27.11.2026, von Sven freigegeben): Die
+  Anbieter-Tabs bleiben fest wie vor den Konten, ein Tab je Anbieter auf beiden Seiten; der
+  Punkt zeigt das knappste Konto des Anbieters. Hat ein Anbieter mindestens zwei sichtbare
+  Konten, steht darunter **nur auf „Limits“** eine Kontoleiste: Chips mit Zustandspunkt und
+  Bezeichnung, Standardkonto zuerst, dann nach Bezeichnung. Die Leiste **bricht um**, nichts
+  wird gekürzt, es gibt kein `+n` für Konten. Verworfen: ein Tab je Konto. Schon bei drei
+  Claude-Konten und Codex rutschte Codex ins `+n`-Menü, Bezeichnungen wurden nach 11
+  Zeichen gekürzt („Kunde Schmid…“ zweimal), und die Tabs sprangen beim Wechsel auf
+  „Verbrauch“ (ein Tab je Anbieter) um. Beim Öffnen ist das knappste Konto gewählt; ein
+  Klick auf den Anbieter-Tab kehrt zum zuletzt gewählten Konto des Anbieters zurück.
+- **Fehlerkonten** (Ordner fehlt, keine Anmeldung, Abruffehler ohne Stand) bleiben grau mit
+  „!“ in der Kontoleiste. Ihre Seite nennt den Grund in einem Satz, dazu „Einstellungen
+  öffnen“ (Sven, 27.11.2026).
+- **Kopfzeile des Tabs:** „Claude · frank“, Plan, Zustands-Chip; darf zweizeilig werden.
+  Die Fußzeile nennt weiter den Kontonamen, ungekürzt.
 - **Menüleiste und Popover-Kopf:** knappstes Limit über alle Konten. Der Tooltip nennt
   das Konto („Claude · frank · Woche: 82 %“). „Fester Wert“ ist je Konto wählbar.
 - **Abfragen:** Jedes Konto hat eigenes Token, eigenes Intervall (≥ 300 s), eigenes
@@ -395,13 +421,24 @@ Eine Zuordnung wäre geraten. Darum:
 - Ausgeblendete Konten fließen weder in Limits noch in Verbrauch ein. Liegen ihre Logs
   in einem geteilten Ordner, zählen sie über das sichtbare Konto trotzdem mit.
 
-**Einstellungen, Abschnitt „Konten“.** Je Anbieter die erkannten Konten mit Bezeichnung
-(editierbar, Platzhalter = automatische Bezeichnung), Quelle (Ordner), E-Mail und Schalter
-„Anzeigen“. Ein ausgeblendetes Konto wird nicht abgefragt, verbraucht also kein
-Rate-Limit. Von Hand hinzugefügte Ordner lassen sich wieder entfernen. Darunter
-„Claude-Ordner hinzufügen …“ und „Codex-Ordner hinzufügen …“ (`NSOpenPanel` mit
-versteckten Dateien). Gespeichert wird in den UserDefaults: `accountLabels`
-(ID → Text), `hiddenAccounts` (IDs), `accountFolders` (Anbieter → Pfade).
+**Einstellungen, Abschnitt „Konten“** (Entwurf und Feldplan vom 27.11.2026). Gruppen
+„Claude“, „Codex“, „Weitere Anbieter“. Jede Kontozeile: **beschriftete Checkbox** mit der
+Bezeichnung (Klick auf den Namen schaltet; angehakt = anzeigen), Herkunfts-Abzeichen
+(„Standard“, „automatisch gefunden“, „von Hand“), darunter E-Mail und Ordner in eigenen
+Zeilen, ungekürzt. Die Bezeichnung ändert man über den **Stift**: Dann steht ein Feld über
+die volle Breite mit „Fertig“ (Enter übernimmt, Esc bricht ab), Platzhalter ist die
+automatische Bezeichnung, darunter „Leer lassen für „arbeit“ (aus der E-Mail). Höchstens 24
+Zeichen.“ – so stehen bei acht Konten nicht acht Textfelder da. Ordner „von Hand“ haben
+„Entfernen“ (Text, auf macOS und Windows gleich). Fehler stehen als Satz in der Zeile
+(siehe Erkennung 4 und 5). Ohne Claude- und Codex-Konto: „Noch kein Konto gefunden“ mit
+Satz und beiden Knöpfen. Je Gruppe „Claude-Ordner hinzufügen …“ bzw. „Codex-Ordner
+hinzufügen …“ (`NSOpenPanel` mit versteckten Dateien); ein neuer Ordner erscheint sofort als
+Zeile, nie stumm verworfen. Antigravity und Ollama: Checkbox und „Eine Quelle je Rechner,
+keine weiteren Konten möglich.“ Ein ausgeblendetes Konto wird nicht abgefragt, verbraucht
+also kein Rate-Limit. Die Einstellungen wirken sofort. Gespeichert wird in den
+UserDefaults: `accountLabels` (ID → Text), `hiddenAccounts` (IDs), `accountFolders`
+(Anbieter → Pfade). Die übrigen Schalter unter „Anzeige“ bleiben vorerst Schalter (eigener
+Auftrag).
 
 **Hinweistexte** nennen den Ordner. Ein abgelaufenes Token im zweiten Konto sagt
 „»CLAUDE_CONFIG_DIR=~/.claude-2 claude« im Terminal starten“, denn ein schlichtes `claude`
@@ -409,11 +446,38 @@ erneuert nur das Standardkonto.
 
 **Widgets und iPhone.** `WidgetSnapshot.Provider` bekommt `kind` und `kindName`
 (optional, alte Dateien bleiben lesbar, Version bleibt 1). `name` ist der Tab-Titel mit
-Bezeichnung. Das Widget „Limits“ wählt statt eines festen Anbieter-Enums ein **Konto aus
-einer dynamischen Liste** (`AppEntity`, gelesen aus `widgets.json`). „Knappstes Limit“
-bleibt Standard. Eine gespeicherte Anbieter-ID wie `claude` zeigt das knappste Konto
-dieses Anbieters. Das Widget „Verbrauch“ bleibt je Anbieter und trägt dessen Namen. Die
-iOS-App zeigt die Konten über denselben Stand automatisch als eigene Abschnitte.
+Bezeichnung. Das Widget „Limits“ wählt ein **Konto aus einer dynamischen Liste**
+(`AppEntity`, gelesen aus `widgets.json`; Auflösung in `LimitsAccounts`, TokenStatsCore):
+„Knappstes Limit“ (Standard), dann je Anbieter seine Konten. Ein Anbieter mit mehreren
+Konten hat einen eigenen Abschnitt; erster Eintrag ist **„Claude – knappstes Konto“**
+(`claude@knappstes`, analog `codex@knappstes`), dann die Konten, das Standardkonto mit
+„Standard“ markiert. Bei vielen Einträgen sucht das Suchfeld der Systemliste
+(`EntityStringQuery`).
+
+- **Gespeichertes `claude` = Standardkonto** (Sven, 27.11.2026, Variante B): wie vor den
+  Konten. Bestehende Widgets zeigen nach dem Update dasselbe Konto. Wer das wechselnde
+  knappste Konto will, wählt es ausdrücklich; dann steht „knappstes Konto“ als Pflichtdetail
+  im Kopf, sonst nur der Tarif. Verworfen (Variante A): `claude` als knappstes Konto – das
+  Widget spränge still auf ein anderes Konto, und das Standardkonto bräuchte eine neue ID.
+- **Migration:** Der frühere Enum-Parameter `provider` (`LimitsProviderOption`, Rohwerte
+  `tightest`, `antigravity`, `claude`, `codex`, `ollama`) bleibt mit gleichem Namen und Typ
+  im Intent, ausgeblendet über `parameterSummary`. Neu ist der Parameter `account`.
+  Solange `account` leer ist, gilt der alte Wert. So muss WidgetKit keinen gespeicherten
+  Enum-Wert in eine Entity umwandeln – ob es das könnte, ist nicht dokumentiert.
+- **Fehlt das gewählte Konto** (ausgeblendet, Ordner entfernt), zeigt das Widget kein
+  anderes, sondern seinen letzten Namen und „Konto ausgeblendet oder Ordner fehlt. Widget
+  bearbeiten und ein anderes Konto wählen.“ Die Liste nennt es „Claude · Kunde A“ mit
+  „nicht mehr da“, nie `claude@…`. Dafür schreibt die App `accountNames` (Konto-ID → letzter
+  Titel, nur Titel) in `widgets.json` (optional, Version bleibt 1).
+- **Großes Widget:** alle sichtbaren Konten, auch Fehlerkonten. Passen die Abschnitte mit
+  allen Limits nicht, eine Tabelle „Konto | Knappstes Limit“ (eine Zeile je Konto, Fehler
+  zuerst, dann nach knappstem Limit absteigend), passt auch die nicht, eine Sammelzeile
+  „+7 weitere Konten · höchstens 26 %“ (`ViewThatFits`). Nichts fällt still weg. Das
+  einheitliche Layout aller Widgets (Stufenleitern, Maße) regelt der Entwurf „Widgets
+  einheitlich“.
+
+Das Widget „Verbrauch“ bleibt je Anbieter und trägt dessen Namen. Die iOS-App zeigt die
+Konten über denselben Stand automatisch als eigene Abschnitte.
 
 **Windows und Linux.** Der Windows-Port setzt dasselbe Modell um: Erkennung von
 `%USERPROFILE%\.claude-*`/`.codex-*`, Ordner in den Einstellungen, gleiche Kennungen
@@ -421,6 +485,16 @@ iOS-App zeigt die Konten über denselben Stand automatisch als eigene Abschnitte
 Zugangsdaten liegen dort nur in `<ordner>\.credentials.json`. Die Linux-Widgets (nur
 Claude) erkennen `~/.claude-*`, den Ordner aus `CLAUDE_CONFIG_DIR` und Ordner aus
 `TOKENSTATS_CLAUDE_DIRS` (durch `:` getrennt), weil sie keine Einstellungsseite haben.
+Aufbau wie auf dem Mac: fester Eintrag „Claude“, darunter auf „Limits“ die umbrechende
+Kontoleiste (GTK `Gtk.FlowBox`, Plasma `Flow` statt einer `TabBar`, die die Breite aufteilt
+und Titel kürzt). Ein Ordner aus `TOKENSTATS_CLAUDE_DIRS`, den es nicht gibt, bleibt grau
+mit „!“ und Hinweis. Windows-Hinweise nennen Befehle in PowerShell-Form
+(`$env:CLAUDE_CONFIG_DIR="…"; claude`).
+
+**Demo-Konten.** `TOKENSTATS_DEMO_ACCOUNTS=1` (nur Debug-Build; Zustände `one`, `multi`,
+`many`, `empty`, `invalid`) ersetzt die Erkennung durch erfundene Konten (`DemoAccounts` in
+TokenStatsCore), für `TOKENSTATS_OPEN_SETTINGS` und `make screenshots`. Bezeichnungen und
+Ausblenden wirken dann nur im Speicher, nie in den UserDefaults.
 
 **Abgrenzung:** Account-Wechsel (§7) ist ein anderes Thema. Er tauscht das aktive Login
 einer CLI. Mehrere Konten zeigen dagegen parallel angemeldete Logins an, ohne an den
@@ -532,8 +606,8 @@ Mitteilungszentrale und Schreibtisch, je klein, mittel und groß.
   das kleine Widget, damit die Einstellung nicht in einer Größe wirkungslos ist.
   Der Geldbetrag erscheint nur, wenn „API-Vergleichswert in Geld anzeigen“ an ist.
 - **„Limits“:** die Meter-Zeilen mit Pace-Marke wie im Popover, klein zwei Fenster,
-  mittel bis zu vier in zwei Spalten, groß alle Anbieter. Anbieter wählbar, Standard ist
-  der mit dem knappsten Limit. In den schmalen Spalten fällt der Zusatz („7 d, alle
+  mittel bis zu vier in zwei Spalten, groß alle Konten (bei vielen als Tabelle mit
+  Sammelzeile, §6 „Mehrere Konten“). Konto wählbar, Standard ist das knappste Limit. In den schmalen Spalten fällt der Zusatz („7 d, alle
   Modelle“) weg, klein stehen Reset und Pace untereinander.
 - Klick aufs Widget öffnet das Popover auf der passenden Seite und beim passenden
   Anbieter, über das URL-Schema `tokenstats://usage|limits?provider=…&period=…`.
