@@ -61,7 +61,9 @@ public struct MeterRow: View {
         let layout = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 1)) : AnyLayout(HStackLayout())
         layout {
             if let resetsAt = window.resetsAt {
+                // Einzeilig in fester Höhe (Widgets 12 pt, Entwurf §4.1) – sonst springt die Stufe zu früh.
                 Text("Reset \(Format.reset(resetsAt, now: now))").lineLimit(1).fixedSize()
+                    .frame(height: compact ? 12 : nil)
             }
             if !stacked { Spacer(minLength: 6) }
             if let elapsed, let windowLength = window.windowLength {

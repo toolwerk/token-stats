@@ -31,7 +31,7 @@ import Testing
     @Test func tooLongPartBreaksAfterSeparator() {
         // Kleines Widget: rund 20 Zeichen je Zeile.
         let lines = wrap("CLAUDE_CONFIG_DIR=~/claude-alt claude", 20)
-        #expect(lines == ["CLAUDE_CONFIG_DIR=~/", "claude-alt claude"], "letzter Bruch nach „/“, der noch passt")
+        #expect(lines == ["CLAUDE_CONFIG_DIR=", "~/claude-alt", "claude"], "„=“ geht vor „/“, das Pfadstück wandert ganz")
         #expect(fits(lines, 20))
     }
 
@@ -40,7 +40,25 @@ import Testing
         #expect(fits(lines, 30))
         #expect(lines.dropLast().allSatisfy { line in line.last.map { CommandWrap.softBreaks.contains($0) } ?? false }
                 || lines.dropLast().contains { !$0.contains("/") }, "Brüche nach Trennzeichen oder Leerzeichen")
-        #expect(lines.first == "CLAUDE_CONFIG_DIR=~/Projekte/")
+        #expect(lines.first == "CLAUDE_CONFIG_DIR=", "„=“ vor „/“")
+    }
+
+    @Test func designerExampleKeepsPathTogether() {
+        // Runde 3: Das große Widget brach „CLAUDE_CONFIG_DIR=~/.“ / „claude-“ / „alt claude“.
+        let command = "CLAUDE_CONFIG_DIR=~/.claude-alt claude"
+        #expect(wrap(command, 29) == ["CLAUDE_CONFIG_DIR=", "~/.claude-alt claude"])
+        #expect(wrap(command, 20) == ["CLAUDE_CONFIG_DIR=", "~/.claude-alt", "claude"])
+        for width in 6...44 {
+            #expect(!wrap(command, width).contains { $0.hasSuffix("/.") || $0.hasSuffix("~/.") },
+                    "nie nach dem Punkt, mit dem „.claude“ beginnt (Breite \(width))")
+        }
+    }
+
+    @Test func dotStartingANameIsNoBreak() {
+        // „~/.claude-alt“ bei 10: nach „/“ statt nach dem Punkt, dann nach „-“.
+        #expect(wrap("~/.claude-alt", 10) == ["~/", ".claude-", "alt"])
+        #expect(wrap("a.b.c.d.e.f.g", 6) == ["a.b.c.", "d.e.", "f.g"], "Punkte mitten im Namen bleiben Bruchstellen")
+        #expect(wrap("A=b/c/d/e/f", 9) == ["A=", "b/c/d/", "e/f"], "„=“ vor „/“")
     }
 
     @Test func hardBreakOnlyAsLastResort() {

@@ -59,8 +59,15 @@ struct WidgetHeader: View {
             }
             // Titel in einer Zeile, Details darunter. Beim knappsten Konto nicht: Dort steht in
             // jeder Stufe zuerst der Kontoname, dann „knappstes Konto“, dann „Claude · Tarif“.
+            // Jede Form gibt es mit den Details in einer Zeile, mit „+N Limits“ in eigener Zeile
+            // und mit jedem Detail in eigener Zeile (`detailVariants`).
             if selection == nil {
-                row(dot: true) { stack([line(title, Self.titleFont)], details: [selection, detail], dot: false) }
+                ForEach(0..<Self.detailVariantCount, id: \.self) { variant in
+                    row(dot: false) {
+                        stack([line(title, Self.titleFont)], details: Self.detailVariant([selection, detail], variant),
+                              dot: false, dotOnTitle: true)
+                    }
+                }
             }
             // Erst mit Punkt rechts im Kopf, dann mit Punkt in der Detailzeile (Titel 12 pt breiter).
             // Kandidaten: Titel am „·“ („Claude ·“ / „Kunde A“), dann der Kontoname zweizeilig an
@@ -68,36 +75,55 @@ struct WidgetHeader: View {
             if let kind, let account {
                 ForEach(Self.candidates(splits: splits.count, accountFirst: selection != nil), id: \.self) { candidate in
                     let dotInRow = candidate.dotInRow
-                    row(dot: dotInRow) {
+                    // Der Punkt steht in der ersten Titelzeile, nicht neben dem ganzen Block: So
+                    // begrenzt er nur die Titelzeile, und die Details dürfen die volle Breite nutzen.
+                    row(dot: false) {
+                        let kindDetails = Self.detailVariant([selection, [kind, detail].compactMap { $0 }.joined(separator: " · ")],
+                                                             candidate.details)
                         if candidate.accountLine {
-                            stack([line(account, Self.titleFont)],
-                                  details: [selection, [kind, detail].compactMap { $0 }.joined(separator: " · ")],
-                                  dot: !dotInRow)
+                            stack([line(account, Self.titleFont)], details: kindDetails, dot: !dotInRow, dotOnTitle: dotInRow)
                         } else if let index = candidate.split {
                             stack([line(splits[index][0], Self.titleFont), line(splits[index][1], Self.titleFont)],
-                                  details: [selection, [kind, detail].compactMap { $0 }.joined(separator: " · ")],
-                                  dot: !dotInRow)
+                                  details: kindDetails, dot: !dotInRow, dotOnTitle: dotInRow)
                         } else {
                             stack([line(kind + " ·", Self.titleFont), line(account, .system(size: 12))],
-                                  details: [selection, detail], dot: !dotInRow)
+                                  details: Self.detailVariant([selection, detail], candidate.details),
+                                  dot: !dotInRow, dotOnTitle: dotInRow)
                         }
                     }
                 }
             }
-            // Letzter Ausweg: Umbruch nur an Leerzeichen und Bindestrichen, nie mitten im Wort.
+            // Letzter Ausweg: Titel bricht nur an Leerzeichen und Bindestrichen um, die Details an
+            // „ · “ und Leerzeichen; nie mitten im Wort und nie breiter als die Kachel – sonst
+            // drückt eine zu lange Detailzeile („Max 20× · +2 Limits“) den Inhalt an den rechten
+            // Rand (Designer-Prüfung PR #5, Runde 3).
             let accountFirst = selection != nil && kind != nil && account != nil
-            row(dot: false) {
+            row(dot: true) {
                 VStack(alignment: .leading, spacing: 1) {
                     TokenFlow(spacing: 0) {
                         ForEach(Array(Self.breakTokens(accountFirst ? account! : title).enumerated()), id: \.offset) { _, token in
                             Text(token).font(Self.titleFont).lineLimit(1).fixedSize()
                         }
                     }
-                    stackDetails(accountFirst ? [selection, [kind!, detail].compactMap { $0 }.joined(separator: " · ")] : [selection, detail],
-                                 dot: true)
+                    let details = (accountFirst ? [selection, [kind!, detail].compactMap { $0 }.joined(separator: " · ")] : [selection, detail])
+                        .compactMap { $0?.nilIfEmpty }
+                    ForEach(details.indices, id: \.self) { index in
+                        TokenFlow(spacing: 0) {
+                            ForEach(Array(Self.detailTokens(details[index]).enumerated()), id: \.offset) { _, token in
+                                Text(token).font(Self.detailFont).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
+
+    /// Stellen, an denen eine Detailzeile umbrechen darf: nach „ · “, sonst nach Leerzeichen,
+    /// wobei „+2 Limits“ und „Max 20×“ zusammenbleiben.
+    static func detailTokens(_ text: String) -> [String] {
+        let parts = text.components(separatedBy: " · ")
+        return parts.enumerated().map { index, part in index == parts.count - 1 ? part : part + " · " }
     }
 
     private func row(alignment: VerticalAlignment = .top, dot: Bool, @ViewBuilder _ content: () -> some View) -> some View {
@@ -117,9 +143,21 @@ struct WidgetHeader: View {
         }
     }
 
-    private func stack(_ titleLines: [AnyView], details: [String?], dot: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            ForEach(titleLines.indices, id: \.self) { titleLines[$0] }
+    private func stack(_ titleLines: [AnyView], details: [String?], dot: Bool, dotOnTitle: Bool = false) -> some View {
+        // Kein Zusatzabstand zwischen den Kopfzeilen: Der Zeilenabstand der Schrift reicht, und
+        // in der kleinsten Kachel zählt jeder Punkt (Entwurf „Widgets einheitlich“ §4.1).
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(titleLines.indices, id: \.self) { index in
+                if index == 0, dotOnTitle, severity != nil {
+                    HStack(spacing: 6) {
+                        titleLines[index]
+                        Spacer(minLength: 6)
+                        circle
+                    }
+                } else {
+                    titleLines[index]
+                }
+            }
             stackDetails(details, dot: dot)
         }
     }
@@ -130,7 +168,8 @@ struct WidgetHeader: View {
         let lines = details.compactMap { $0?.nilIfEmpty }
         ForEach(lines.indices, id: \.self) { index in
             HStack(spacing: 6) {
-                line(lines[index], Self.detailFont).foregroundStyle(.secondary)
+                // Einzeilige Detailzeile in fester Höhe 12 pt (Entwurf §4.1); die Glyphen passen.
+                line(lines[index], Self.detailFont).foregroundStyle(.secondary).frame(height: 12)
                 if dot, index == 0, severity != nil {
                     Spacer(minLength: 6)
                     circle
@@ -153,13 +192,34 @@ struct WidgetHeader: View {
         var split: Int?
         /// Kontoname einzeilig als Titel, „Claude · Tarif“ darunter.
         var accountLine = false
+        /// Welche Variante der Detailzeilen (`detailVariant`).
+        var details = 0
     }
 
     /// `accountFirst` beim knappsten Konto: statt der Teilung am „·“ der Kontoname als Titel.
+    /// Je Titelform zuerst die Details in einer Zeile, dann aufgeteilt.
     static func candidates(splits: Int, accountFirst: Bool = false) -> [Candidate] {
         [true, false].flatMap { dot in
-            [Candidate(dotInRow: dot, split: nil, accountLine: accountFirst)]
-                + (0..<splits).map { Candidate(dotInRow: dot, split: $0) }
+            ([Candidate(dotInRow: dot, split: nil, accountLine: accountFirst)]
+                + (0..<splits).map { Candidate(dotInRow: dot, split: $0) })
+                .flatMap { form in (0..<detailVariantCount).map { var c = form; c.details = $0; return c } }
+        }
+    }
+
+    static let detailVariantCount = 3
+
+    /// Detailzeilen in drei Stufen: wie gegeben; der letzte Teil der letzten Zeile („+2 Limits“)
+    /// in eigener Zeile; jeder Teil in eigener Zeile. Nie ein Bruch mitten in einem Teil.
+    static func detailVariant(_ details: [String?], _ variant: Int) -> [String?] {
+        let lines = details.compactMap { $0?.nilIfEmpty }
+        switch variant {
+        case 0:
+            return lines
+        case 1:
+            guard let last = lines.last, let range = last.range(of: " · ", options: .backwards) else { return lines }
+            return lines.dropLast() + [String(last[..<range.lowerBound]), String(last[range.upperBound...])]
+        default:
+            return lines.flatMap { $0.components(separatedBy: " · ") }
         }
     }
 
@@ -440,7 +500,8 @@ public struct LimitsWidgetView: View {
                     // als ein abgeschnittenes – gezeigt werden dann die knappsten.
                     let most = min(windows.count, size == .medium ? 4 : 2)
                     ViewThatFits(in: .vertical) {
-                        ForEach(Array((1...max(most, 1)).reversed()), id: \.self) { count in
+                        // Zuletzt nur der Kopf mit „+N Limits“ – lieber kein Meter als ein abgeschnittener.
+                        ForEach(Array((0...max(most, 1)).reversed()), id: \.self) { count in
                             VStack(alignment: .leading, spacing: 8) {
                                 section(shown, columns: size == .medium ? 2 : 1, maxWindows: count, compact: true)
                             }

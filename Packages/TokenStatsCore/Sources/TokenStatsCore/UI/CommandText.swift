@@ -91,6 +91,25 @@ public enum CommandWrap {
     /// Einzug der Folgezeilen, in Zeichen.
     public static let indentCharacters = 2
 
+    /// Rangfolge der Bruchstellen nach einem Zeichen, wenn kein Leerzeichen passt (Designer-
+    /// Prüfung PR #5, Runde 3): erst „=“, dann „/“, dann „- _ . :“. So wandert ein Pfadstück
+    /// ganz in die nächste Zeile, wenn es dort passt.
+    static let breakRanks: [Set<Character>] = [["="], ["/"], ["-", "_", ".", ":"]]
+
+    /// Letzte erlaubte Bruchstelle des höchsten Rangs in `range`. Nie nach einem „.“, mit dem
+    /// ein Name beginnt (`~/.claude`, `=.codex`, `.claude` am Zeilenanfang).
+    static func softBreak(_ characters: [Character], in range: Range<Int>) -> Int? {
+        func allowed(_ index: Int) -> Bool {
+            guard characters[index] == "." else { return true }
+            guard index > range.lowerBound else { return false }
+            return !["/", "\\", "=", "~", " ", "\""].contains(characters[index - 1])
+        }
+        for rank in breakRanks {
+            if let index = range.last(where: { rank.contains(characters[$0]) && allowed($0) }) { return index }
+        }
+        return nil
+    }
+
     /// Zeilen als Bereiche in `characters`. `available` gilt für die erste Zeile, Folgezeilen
     /// haben `indent` weniger. Leerzeichen am Bruch entfallen. Jede Zeile hat mindestens ein
     /// Zeichen, auch wenn es allein schon zu breit ist.
@@ -121,7 +140,7 @@ public enum CommandWrap {
             } else if let space = (start..<end).last(where: { characters[$0] == " " }), space > start {
                 result.append(start..<space)
                 start = space + 1
-            } else if let soft = (start..<end).last(where: { softBreaks.contains(characters[$0]) }) {
+            } else if let soft = softBreak(characters, in: start..<end) {
                 result.append(start..<(soft + 1))
                 start = soft + 1
             } else {

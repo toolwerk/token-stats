@@ -442,8 +442,9 @@ Auftrag).
 
 **Befehle in Hinweisen** (in »…«) stehen auf allen Plattformen als eigene Zeile in
 Monospace und werden nie abgeschnitten. Umbrochen wird zuerst an Leerzeichen; ist ein Teil
-zu breit, nach `/ = _ - . :` (Windows zusätzlich `\`), ohne Trennstrich; erst als letzter
-Ausweg nach einem beliebigen Zeichen. Folgezeilen sind 2 Zeichen eingerückt. „Befehl
+zu breit, nach `=`, sonst nach `/` (Windows auch `\`), sonst nach `- _ . :`, ohne
+Trennstrich; erst als letzter Ausweg nach einem beliebigen Zeichen. Nie nach einem „.“, mit
+dem ein Name beginnt (`~/.claude`), so wandert ein Pfadstück ganz in die nächste Zeile. Folgezeilen sind 2 Zeichen eingerückt. „Befehl
 kopieren“ kopiert den ganzen Befehl (macOS `CommandText`/`CommandWrap`, Windows
 `CommandText.cs`, Linux `wrap_command`/`wrapCommand`).
 
