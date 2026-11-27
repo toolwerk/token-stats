@@ -427,6 +427,12 @@ class FormatTest(unittest.TestCase):
                          ("2,8 M", "1,2 M", "245 k", "12"))
         self.assertEqual((gtk.money(2.09), gtk.money(1234.5)), ("2,09 $", "1.234,50 $"))
 
+    def test_gtk_weekdays(self):
+        from datetime import date, timedelta
+        monday = date(2026, 11, 30)
+        self.assertEqual([gtk.weekday_short(monday + timedelta(days=i)) for i in range(7)],
+                         ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"])
+
     @unittest.skipUnless(shutil.which("node"), "node fehlt")
     def test_util_js(self):
         with open(os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "code", "util.js")) as f:

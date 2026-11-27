@@ -553,6 +553,14 @@ def fmt(n):
     return f"{decimal(n / 1e6, 1)} M" if n >= 1e6 else f"{n / 1e3:.0f} k" if n >= 1e3 else str(n)
 
 
+# Wochentag kurz und deutsch, unabhängig von LANG (strftime ergab „Mon“); Index wie date.weekday(), Montag = 0
+WEEKDAYS = ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
+
+
+def weekday_short(d):
+    return WEEKDAYS[d.weekday()]
+
+
 def money(v):
     """API-Vergleichswert in Dollar, deutsch geschrieben: 2,09 $."""
     return f"{decimal(v)} $"
@@ -937,8 +945,8 @@ class Popup(Gtk.Window):
             reset_txt = ""
             if r["reset"]:
                 rt = datetime.fromisoformat(r["reset"]).astimezone()
-                fmt_t = "%H:%M" if left < 86400 else "%a %H:%M"
-                reset_txt = f"Reset {rt.strftime(fmt_t)}"
+                day = "" if left < 86400 else f"{weekday_short(rt)} "
+                reset_txt = f"Reset {day}{rt:%H:%M}"
             bottom.pack_start(label(reset_txt, "ts-dim"), False, False, 0)
             if elapsed is not None:
                 gap = (r["pct"] / 100 - elapsed) * r["window"]
@@ -990,7 +998,7 @@ class Popup(Gtk.Window):
                 for i in range(5):
                     per_model[model][i] += c[i]
                 day_tokens += sum(c)
-            series.append((d.strftime("%a")[:2] if n <= 7 else str(d.day), day_tokens, d == today))
+            series.append((weekday_short(d) if n <= 7 else str(d.day), day_tokens, d == today))
         total = sum(sum(c) for c in per_model.values())
         cache = sum(c[2] + c[3] + c[4] for c in per_model.values())
         for model, c in per_model.items():
