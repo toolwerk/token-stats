@@ -144,6 +144,58 @@ public enum DemoData {
         )
     }
 
+    /// Viele Konten für Layout-Tests und Renderings des großen Limits-Widgets: die vier
+    /// Demo-Anbieter (Claude als Standardkonto „Claude · Privat“, ID `claude`) plus weitere
+    /// Claude-Konten „Claude · Kunde A“ usw. „Kunde A“ steht auf 100 %, damit die rote Stufe
+    /// und der breiteste Prozentwert in den Renderings vorkommen. Mehrere Konten je Anbieter gibt
+    /// es erst mit PR #2; hier ist es nur ein Name mit Kontoteil, kein eigenes Datenmodell.
+    /// `count` zwischen 4 und 20.
+    public static func accountsSnapshot(now: Date, count: Int) -> WidgetSnapshot {
+        var snapshot = widgetSnapshot(now: now)
+        let claude = snapshot.provider("claude")!
+        if let index = snapshot.providers.firstIndex(where: { $0.id == "claude" }) {
+            snapshot.providers[index].name = "Claude · Privat"
+        }
+        let accounts: [(name: String, percents: [Double])] = [
+            ("Kunde A", [0.67, 1.0]), ("Agentur Nord", [0.55, 0.72]),
+            ("Kunde Schmidt Beratung", [0.08, 0.61]), ("Arbeit", [0.23, 0.51]), ("Labor", [0.41, 0.58]),
+            ("Kunde D", [0.36, 0.47]), ("Schulung 2027", [0.31, 0.44]), ("Support", [0.28, 0.39]),
+            ("Kunde B", [0.12, 0.34]), ("Kunde F", [0.33, 0.31]), ("Kunde C", [0.14, 0.28]),
+            ("Projekt West", [0.09, 0.26]), ("Kunde G", [0.19, 0.24]), ("Vertrieb", [0.17, 0.22]),
+            ("Projekt Ost", [0.22, 0.19]), ("Archiv", [0.02, 0.04]),
+        ]
+        let extra = accounts.prefix(max(count - 4, 0)).map { account -> WidgetSnapshot.Provider in
+            var provider = claude
+            provider.id = "claude-" + account.name.lowercased().replacingOccurrences(of: " ", with: "-")
+            provider.name = "Claude · " + account.name
+            provider.snapshot?.windows = zip(claude.snapshot!.windows, account.percents).map { window, percent in
+                var window = window
+                window.percent = percent
+                return window
+            }
+            return provider
+        }
+        snapshot.providers = Array((snapshot.providers + extra).prefix(max(count, 1)))
+        return snapshot
+    }
+
+    /// Fehler und pausierte Abfrage: Claude mit Stand, ein Konto mit abgelaufener Anmeldung,
+    /// Codex mit Rate-Limit (letzte Werte, „Abfrage pausiert“).
+    public static func failureSnapshot(now: Date) -> WidgetSnapshot {
+        var snapshot = widgetSnapshot(now: now)
+        var claude = snapshot.provider("claude")!
+        claude.name = "Claude · Privat"
+        var failing = claude
+        failing.id = "claude-arbeit"
+        failing.name = "Claude · Arbeit"
+        failing.snapshot = nil
+        failing.message = "Anmeldung abgelaufen. In Token Stats neu anmelden."
+        var codex = snapshot.provider("codex")!
+        codex.isRateLimited = true
+        snapshot.providers = [claude, failing, codex]
+        return snapshot
+    }
+
     /// Zwei Macs, wie sie die iOS-App aus iCloud bekäme (Issue #11).
     public static func machines(now: Date) -> [WidgetSnapshot] {
         [

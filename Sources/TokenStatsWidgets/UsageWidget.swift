@@ -62,6 +62,9 @@ struct UsageTimelineProvider: AppIntentTimelineProvider {
     }
 
     func timeline(for configuration: UsageConfigurationIntent, in context: Context) async -> Timeline<UsageEntry> {
+        #if DEBUG
+        WidgetSizeLog.log("usage", family: context.family, size: context.displaySize)
+        #endif
         let snapshot = WidgetSnapshot.loadForWidgets()
         let plan = WidgetTimeline.plan(now: .now, snapshot: snapshot)
         let entries = plan.dates.map {

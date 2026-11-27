@@ -95,26 +95,36 @@ struct Screenshots {
         .padding(1)
     }
 
-    /// Die Widgets „Verbrauch“ und „Limits“ in Klein, Mittel und Groß, mit denselben Demo-Werten.
+    /// Die Widgets „Verbrauch“ und „Limits“ in allen Größen, mit denselben Demo-Werten. Die
+    /// Kacheln haben die Maße der kleinsten echten Mac-Kachel (164 / 344 × 164 / 344 × 344 /
+    /// 704 × 344 pt, Entwurf „Widgets einheitlich“ 4.0) und den Systemrand von 16 pt; die Views
+    /// wählen ihre Stufe dann wie im echten Widget.
     private var widgets: some View {
         let snapshot = DemoData.widgetSnapshot(now: .now, prices: consumption.prices)
-        func tile(_ content: some View, width: CGFloat, height: CGFloat) -> some View {
+        let small = CGSize(width: 164, height: 164), medium = CGSize(width: 344, height: 164)
+        let large = CGSize(width: 344, height: 344), extraLarge = CGSize(width: 704, height: 344)
+        func tile(_ content: some View, _ size: CGSize) -> some View {
             content
-                .padding(14)
-                .frame(width: width, height: height)
-                .background(RoundedRectangle(cornerRadius: 16).fill(Color(nsColor: .windowBackgroundColor)))
-                .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.separator))
+                .frame(width: size.width - 32, height: size.height - 32, alignment: .topLeading)
+                .padding(16)
+                .background(RoundedRectangle(cornerRadius: 22).fill(Color(nsColor: .windowBackgroundColor)))
+                .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(.separator))
         }
-        return VStack(spacing: 16) {
+        return VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 16) {
-                tile(UsageWidgetView(snapshot: snapshot, provider: nil, period: .today, size: .small), width: 160, height: 160)
-                tile(UsageWidgetView(snapshot: snapshot, provider: nil, period: .week, size: .medium), width: 340, height: 160)
+                tile(UsageWidgetView(snapshot: snapshot, provider: nil, period: .today, size: .small), small)
+                tile(UsageWidgetView(snapshot: snapshot, provider: nil, period: .week, size: .medium), medium)
+                tile(LimitsWidgetView(snapshot: snapshot, provider: nil, size: .small), small)
+                tile(LimitsWidgetView(snapshot: snapshot, provider: "claude", size: .medium), medium)
             }
             HStack(alignment: .top, spacing: 16) {
-                tile(LimitsWidgetView(snapshot: snapshot, provider: nil, size: .small), width: 160, height: 160)
-                tile(LimitsWidgetView(snapshot: snapshot, provider: "claude", size: .medium), width: 340, height: 160)
+                tile(UsageWidgetView(snapshot: snapshot, provider: "claude", period: .month, size: .large), large)
+                tile(LimitsWidgetView(snapshot: snapshot, provider: nil, size: .large), large)
+                tile(LimitsWidgetView(snapshot: snapshot, provider: nil, size: .extraLarge), extraLarge)
             }
-            tile(UsageWidgetView(snapshot: snapshot, provider: "claude", period: .month, size: .large), width: 516, height: 330)
+            HStack(alignment: .top, spacing: 16) {
+                tile(UsageWidgetView(snapshot: snapshot, provider: "claude", period: .month, size: .extraLarge), extraLarge)
+            }
         }
         .padding(20)
         .background(Color(nsColor: .underPageBackgroundColor))
