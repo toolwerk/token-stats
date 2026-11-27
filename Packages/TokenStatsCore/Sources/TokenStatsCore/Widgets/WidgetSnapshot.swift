@@ -77,23 +77,34 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
     /// Installierte Anbieter, alphabetisch wie die Tabs.
     public var providers: [Provider]
     public var usage: [Usage]
+    /// Letzte bekannte Titel aller Konten, auch ausgeblendeter und entfernter, Konto-ID → Titel.
+    /// Damit nennt die Widget-Auswahl ein verschwundenes Konto beim Namen statt `claude@…`.
+    /// Optional: Dateien von vor den Konten bleiben lesbar.
+    public var accountNames: [String: String]?
 
-    public init(writtenAt: Date = .now, machine: String? = nil, showMoney: Bool, providers: [Provider], usage: [Usage]) {
+    public init(writtenAt: Date = .now, machine: String? = nil, showMoney: Bool, providers: [Provider], usage: [Usage],
+                accountNames: [String: String]? = nil) {
         version = Self.currentVersion
         self.writtenAt = writtenAt
         self.machine = machine
         self.showMoney = showMoney
         self.providers = providers
         self.usage = usage
+        self.accountNames = accountNames
     }
 
     // MARK: Abfragen
 
-    /// Das Konto mit dieser ID – oder, bei einer Anbieter-ID, das knappste Konto des Anbieters.
+    /// Das Konto mit dieser ID. Eine Anbieter-ID (`claude`) ist die des Standardkontos;
+    /// `claude@knappstes` ist das knappste Konto des Anbieters (`LimitsAccounts`). Fehlt das
+    /// Konto (ausgeblendet, Ordner weg), ist das Ergebnis `nil` – nie still ein anderes Konto.
     public func provider(_ id: String) -> Provider? {
         if let exact = providers.first(where: { $0.id == id }) { return exact }
-        let ofKind = providers.filter { $0.providerKind == id }
-        return ofKind.max { ($0.snapshot?.tightestWindow?.percent ?? -1) < ($1.snapshot?.tightestWindow?.percent ?? -1) }
+        guard let kind = LimitsAccounts.tightestKind(id) else { return nil }
+        return providers.filter { $0.providerKind == kind }.enumerated().max { a, b in
+            let pa = a.element.snapshot?.tightestWindow?.percent ?? -1, pb = b.element.snapshot?.tightestWindow?.percent ?? -1
+            return pa != pb ? pa < pb : a.offset > b.offset
+        }?.element
     }
 
     /// Anzeigename eines Anbieters ohne Konto, für den Verbrauch.

@@ -31,16 +31,36 @@ struct WidgetHeader: View {
     let severity: Severity?
 
     var body: some View {
-        HStack(spacing: 6) {
-            RobotIcon(size: 13)
-            Text(title).font(.system(size: 12, weight: .bold)).lineLimit(1).fixedSize()
-            if let detail {
-                Text(detail).font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
+        // Erst alles in einer Zeile; passt das nicht, brechen Titel und Detail um. Nichts wird
+        // gekürzt – „knappstes Konto“ ist Pflicht, und Kontonamen bleiben ganz (SPEC §6).
+        // Die Stufen S1–S8 aus dem Entwurf „Widgets einheitlich“ ersetzen das später.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                RobotIcon(size: 13)
+                Text(title).font(.system(size: 12, weight: .bold)).lineLimit(1).fixedSize()
+                if let detail {
+                    Text(detail).font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                }
+                Spacer(minLength: 6)
+                dot
             }
-            Spacer(minLength: 0)
-            if let severity {
-                Circle().fill(severity.color).frame(width: 7, height: 7)
+            HStack(alignment: .top, spacing: 6) {
+                RobotIcon(size: 13)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.system(size: 12, weight: .bold)).fixedSize(horizontal: false, vertical: true)
+                    if let detail {
+                        Text(detail).font(.system(size: 10.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 6)
+                dot.padding(.top, 4)
             }
+        }
+    }
+
+    @ViewBuilder private var dot: some View {
+        if let severity {
+            Circle().fill(severity.color).frame(width: 7, height: 7)
         }
     }
 }
@@ -256,10 +276,16 @@ public struct LimitsWidgetView: View {
         }
     }
 
-    /// Welcher Anbieter gezeigt wird – gewählt oder der knappste, sonst der erste mit Stand.
+    /// Welches Konto gezeigt wird – gewählt oder das knappste, sonst das erste mit Stand.
+    /// Ein gewähltes Konto, das nicht im Stand steht, ergibt `nil` (kein stiller Wechsel).
     public static func resolve(_ snapshot: WidgetSnapshot, provider: String?) -> WidgetSnapshot.Provider? {
         if let provider { return snapshot.provider(provider) }
         return snapshot.tightest?.provider ?? snapshot.providers.first { $0.snapshot != nil } ?? snapshot.providers.first
+    }
+
+    /// Pflichtdetail bei „Claude – knappstes Konto“: Das gezeigte Konto wechselt von selbst.
+    private var selectionDetail: String? {
+        provider.flatMap(LimitsAccounts.tightestKind) == nil ? nil : "knappstes Konto"
     }
 
     @ViewBuilder
@@ -267,29 +293,40 @@ public struct LimitsWidgetView: View {
         switch size {
         case .large:
             VStack(alignment: .leading, spacing: 12) {
-                let providers = snapshot.providers.filter { $0.snapshot != nil }
-                if providers.isEmpty {
+                if snapshot.providers.allSatisfy({ $0.snapshot == nil }) {
                     WidgetHeader(title: "Limits", detail: nil, severity: nil)
                     noData(snapshot.providers.first)
                 } else {
-                    // Ab vier Konten passt je Konto nur eine Zeile, sonst fällt das letzte unten heraus.
-                    let maxWindows = providers.count > 3 ? 2 : 4
-                    ForEach(providers) { provider in
-                        section(provider, columns: 2, maxWindows: maxWindows, compact: true)
-                    }
+                    large(snapshot)
                 }
                 Spacer(minLength: 0)
                 MachineFooter(snapshot: snapshot)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         case .medium, .small:
-            let provider = Self.resolve(snapshot, provider: provider)
+            let shown = Self.resolve(snapshot, provider: provider)
             VStack(alignment: .leading, spacing: 8) {
-                if let provider, provider.snapshot != nil {
-                    section(provider, columns: size == .medium ? 2 : 1, maxWindows: size == .medium ? 4 : 2, compact: true)
+                if let shown, let windows = shown.snapshot?.windows {
+                    // Passt nicht jedes Limit (langer Kontoname, kleine Kachel), lieber eins weniger
+                    // als ein abgeschnittenes – gezeigt werden dann die knappsten.
+                    let most = min(windows.count, size == .medium ? 4 : 2)
+                    ViewThatFits(in: .vertical) {
+                        ForEach(Array((1...max(most, 1)).reversed()), id: \.self) { count in
+                            VStack(alignment: .leading, spacing: 8) {
+                                section(shown, columns: size == .medium ? 2 : 1, maxWindows: count, compact: true)
+                            }
+                        }
+                    }
+                } else if let shown {
+                    WidgetHeader(title: shown.name, detail: selectionDetail, severity: nil)
+                    noData(shown)
+                } else if let provider {
+                    // Gewähltes Konto steht nicht im Stand: beim Namen nennen, nie als `claude@…`.
+                    WidgetHeader(title: LimitsAccounts.choice(for: provider, in: snapshot).title, detail: nil, severity: nil)
+                    note(LimitsAccounts.missingMessage)
                 } else {
-                    WidgetHeader(title: provider?.name ?? "Limits", detail: nil, severity: nil)
-                    noData(provider)
+                    WidgetHeader(title: "Limits", detail: nil, severity: nil)
+                    noData(nil)
                 }
                 Spacer(minLength: 0)
                 MachineFooter(snapshot: snapshot)
@@ -299,7 +336,50 @@ public struct LimitsWidgetView: View {
     }
 
     private func noData(_ provider: WidgetSnapshot.Provider?) -> some View {
-        Text(provider?.message ?? "Noch kein Stand – Token Stats fragt beim nächsten Takt ab.")
+        note(provider?.message ?? "Noch kein Stand – Token Stats fragt beim nächsten Takt ab.")
+    }
+
+    /// Großes Widget, alle sichtbaren Konten: erst Abschnitte mit allen Limits, passt das
+    /// nicht, die Tabelle mit allen Konten, dann mit Sammelzeile – nichts fällt still weg.
+    @ViewBuilder
+    private func large(_ snapshot: WidgetSnapshot) -> some View {
+        let rows = LimitsAccounts.rows(snapshot)
+        let header = WidgetHeader(title: "Limits", detail: LimitsAccounts.countText(snapshot),
+                                  severity: snapshot.tightest?.window.severity)
+        // Mindestens vier Zeilen, sonst lieber die Abschnitte (Entwurf L4: k = n−1 … 4).
+        let partial = rows.count > 5 ? Array((4...(rows.count - 1)).reversed()) : []
+        ViewThatFits(in: .vertical) {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(snapshot.providers) { provider in
+                    if provider.snapshot != nil {
+                        section(provider, columns: 2, maxWindows: 4, compact: true)
+                    } else {
+                        VStack(alignment: .leading, spacing: 6) {
+                            WidgetHeader(title: provider.name, detail: nil, severity: nil)
+                            noData(provider)
+                        }
+                    }
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                header
+                LimitsAccountTable(rows: rows, shown: rows.count, now: now)
+            }
+            ForEach(partial, id: \.self) { shown in
+                VStack(alignment: .leading, spacing: 8) {
+                    header
+                    LimitsAccountTable(rows: rows, shown: shown, now: now)
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                header
+                LimitsAccountTable(rows: rows, shown: min(rows.count, 4), now: now)
+            }
+        }
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
             .font(.system(size: 11))
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -308,12 +388,18 @@ public struct LimitsWidgetView: View {
 
     @ViewBuilder
     private func section(_ provider: WidgetSnapshot.Provider, columns: Int, maxWindows: Int, compact: Bool) -> some View {
-        let windows = Array((provider.snapshot?.windows ?? []).prefix(maxWindows))
+        // Ist kein Platz für alle, die knappsten – in der Reihenfolge der App.
+        let all = provider.snapshot?.windows ?? []
+        let keep = Set(all.enumerated().sorted { $0.element.percent != $1.element.percent ? $0.element.percent > $1.element.percent : $0.offset < $1.offset }
+            .prefix(maxWindows).map(\.element.id))
+        let windows = all.filter { keep.contains($0.id) }
         // Die Spalten sind schmal; der Zusatz „7 d, alle Modelle“ passt nur im großen Widget.
         let showScope = size == .large
+        let plan = provider.isRateLimited ? "Abfrage pausiert" : provider.snapshot?.account?.plan
+        let details = [size == .large ? nil : selectionDetail, plan].compactMap { $0 }
         WidgetHeader(
             title: provider.name,
-            detail: provider.isRateLimited ? "Abfrage pausiert" : provider.snapshot?.account?.plan,
+            detail: details.isEmpty ? nil : details.joined(separator: "\u{00A0}· "),
             severity: provider.snapshot?.tightestWindow?.severity
         )
         if columns == 1 {
