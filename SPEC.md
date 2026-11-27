@@ -437,11 +437,20 @@ bei nur einem oder zwei Konten – `systemExtraLarge` steht ohne Bedingung in de
   Kontoname als Titel → Punkt in der Detailzeile → als letzte Stufe Zeichenumbruch), groß
   L1–L5 (Abschnitte mit allen bzw. den zwei knappsten Limits → Tabelle mit einer Zeile je
   Konto und seinem knappsten Limit → mit Sammelzeile „+7 weitere Konten · höchstens 26 %“ →
-  ohne Limitnamen-Spalte), extragroß X1–X5 (Abschnitte über die volle Breite bzw.
-  zweispaltig → eine Tabelle mit zwei Limits je Konto → zwei Tabellen nebeneinander, zuletzt
-  mit Sammelzeile). In Tabellen stehen Konten mit Fehler oben, dann absteigend nach
-  knappstem Limit; weil absteigend sortiert ist, steckt in der Sammelzeile nie ein
-  knapperes Konto als die gezeigten. Geprüft gegen die kleinste reale Mac-Kachel
+  Limitname als zweite Zeile unter dem Kontonamen statt in eigener Spalte), extragroß X1–X5
+  (Abschnitte über die volle Breite bzw. zweispaltig → eine Tabelle mit zwei Limits je
+  Konto → zwei Tabellen nebeneinander, mit Sammelzeile → X5-kurz mit dem Limitnamen unter
+  dem Kontonamen). Der Limitname fällt nie weg, bei pausierter Abfrage steht „pausiert“
+  mit Pause-Symbol dabei. Zeigt eine Stufe nur einen Teil der Limits (klein, M3, L2, X3),
+  sind es die knappsten, **absteigend nach Prozent**; zeigt sie alle, bleibt die
+  Reihenfolge der App. Kontonamen in Tabellen haben höchstens drei Zeilen und brechen nur
+  am „·“ und an Wortgrenzen; ist ein Wort breiter als die Spalte, scheitert die Stufe –
+  auch für Konten in der Sammelzeile, damit ein langer Name nicht nur wegen der Breite in
+  der Sammelzeile verschwindet, sondern die Stufe mit breiterer Namensspalte übernimmt.
+  In Tabellen stehen Konten mit Fehler oben, dann absteigend nach knappstem Limit; weil
+  absteigend sortiert ist, steckt in der Sammelzeile nie ein knapperes Konto als die
+  gezeigten (Fehlerkonten darin nennt sie: „· 2 mit Fehler“). Die letzte Stufe jeder Leiter
+  prüft nicht streng: Dort brechen einzeilige Texte um, statt am Rand abgeschnitten zu werden. Geprüft gegen die kleinste reale Mac-Kachel
   (164 / 344 × 164 / 344 × 344 / 704 × 344 pt, Rand 18; extragroß aus dem Raster
   abgeleitet, nicht gemessen); Debug-Builds loggen `context.displaySize`. Maße, Stufen und
   Mockups: `konzept.md` des Designers (Thread `design/widgets-einheitlich`). Die Regeln

@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import TokenStatsCore
 
@@ -19,7 +20,7 @@ private func provider(_ id: String, _ name: String, _ percents: [Double]?, messa
 
 @Suite("Limit-Auswahl")
 struct LimitPickTests {
-    @Test("Klein zeigt die zwei knappsten Limits in der Reihenfolge der App – bei Claude Woche und Opus")
+    @Test("Klein zeigt die zwei knappsten Limits, absteigend – bei Claude Woche und Opus")
     func smallShowsTightest() {
         let claude = DemoData.widgetSnapshot(now: now).provider("claude")!.snapshot!.windows
         let pick = LimitPick.tightest(claude, count: LimitPick.small)
@@ -33,6 +34,14 @@ struct LimitPickTests {
         let pick = LimitPick.tightest(windows, count: LimitPick.medium)
         #expect(pick.shown.map(\.id) == ["session", "week", "opus"])
         #expect(pick.hidden == 0)
+    }
+
+    @Test("Passt nur ein Teil, absteigend nach Prozent statt in App-Reihenfolge")
+    func partialIsDescending() {
+        let windows = [window("session", 0.30), window("week", 0.64), window("opus", 0.82)]
+        let pick = LimitPick.tightest(windows, count: 2)
+        #expect(pick.shown.map(\.id) == ["opus", "week"])
+        #expect(pick.hidden == 1)
     }
 
     @Test("Gleichstand: das weiter vorn stehende gewinnt")
@@ -77,7 +86,9 @@ struct LimitsTableTests {
         #expect(WidgetText.moreAccounts(one, accounts: true) == "+1 weiteres Konto · höchstens 26 %")
         #expect(WidgetText.moreAccounts(one, accounts: false) == "+1 weiterer Anbieter · höchstens 26 %")
         let failing = [provider("y", "Claude · Y", nil)]
-        #expect(WidgetText.moreAccounts(failing, accounts: true) == "+1 weiteres Konto")
+        #expect(WidgetText.moreAccounts(failing, accounts: true) == "+1 weiteres Konto · 1 mit Fehler")
+        let mixed = [provider("y", "Claude · Y", nil), provider("z", "Claude · Z", nil), provider("w", "Claude · W", [0.4])]
+        #expect(WidgetText.moreAccounts(mixed, accounts: true) == "+3 weitere Konten · höchstens 40 % · 2 mit Fehler")
     }
 
     @Test("Kopf: „4 Anbieter“ ohne Kontoteil, „8 Konten“ mit")
@@ -103,6 +114,32 @@ struct LimitsTableTests {
         #expect(ModelRows.counts(total: 16, maximum: ModelRows.extraLargeMaximum, minimum: ModelRows.extraLargeMinimum)
                 == Array((4...12).reversed()))
         #expect(ModelRows.counts(total: 3, maximum: 12, minimum: 4) == [3])
+    }
+}
+
+@Suite("Tabelle ohne Limit-Spalte (L5, X5-kurz)")
+struct NarrowTableTests {
+    @Test("Limitname steht als zweite Zeile und fällt nie weg, auch nicht bei Pause")
+    func limitLine() {
+        let week = window("week", 0.58)
+        #expect(WidgetText.limitLine(week, paused: false) == "Week")
+        #expect(WidgetText.limitLine(week, paused: true) == "Week · pausiert")
+    }
+
+    /// Rendert die großen Limits in schmalen Kacheln, die L5 bzw. X5-kurz erzwingen – mit
+    /// Fehlerkonto, pausierter Abfrage und 24-Zeichen-Namen. Prüft, dass jede Stufenleiter
+    /// ohne Laufzeitfehler aufgeht (eindeutige Kennungen in `ViewThatFits`).
+    @Test("Schmale Kacheln mit Fehler und Pause rendern")
+    @MainActor
+    func narrowRender() {
+        var snapshot = DemoData.accountsSnapshot(now: now, count: 12)
+        snapshot.providers += DemoData.failureSnapshot(now: now).providers.filter { $0.isFailing || $0.isRateLimited }
+        snapshot.providers[1].name = "Claude · Hausverwaltung Lindenhof"
+        for (size, width, height) in [(WidgetSize.large, 240.0, 300.0), (.extraLarge, 480.0, 300.0), (.large, 308.0, 308.0)] {
+            let view = LimitsWidgetView(snapshot: snapshot, provider: nil, size: size, now: now)
+                .frame(width: width, height: height)
+            #expect(ImageRenderer(content: view).cgImage != nil)
+        }
     }
 }
 

@@ -16,7 +16,9 @@ das GitHub-Release und für den Update-Dialog in der App.
   nicht alles, wählt das Widget eine knappere Darstellung. Das große Limits-Widget läuft
   nicht mehr über: Es zeigt alle Anbieter, bei Platzmangel als Tabelle mit dem knappsten
   Limit je Anbieter, und auch Anbieter mit Fehler („Anmeldung abgelaufen“). Das kleine
-  Limits-Widget zeigt die zwei knappsten Limits (bei Claude Woche und Opus).
+  Limits-Widget zeigt die zwei knappsten Limits (bei Claude Woche und Opus). Lange
+  Kontonamen brechen in der Tabelle an Wortgrenzen um, und der Name des knappsten Limits
+  bleibt immer sichtbar.
 - **Neu: extragroße Widgets auf dem Mac** (nur Schreibtisch): Limits aller Anbieter in zwei
   Spalten, Verbrauch mit breitem Tagesdiagramm und Modellen in zwei Spalten.
 - **Für Entwickler:** Debug-Builds haben eine eigene Bundle-ID (`de.mahype.TokenStats.debug`)

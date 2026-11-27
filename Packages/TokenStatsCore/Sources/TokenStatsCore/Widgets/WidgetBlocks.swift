@@ -140,6 +140,7 @@ struct OneLine<Content: View>: View {
 struct LineCap: Layout {
     var maxHeight: CGFloat
     var strict: Bool
+    var wordSlack: CGFloat = 2
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         guard let text = subviews.first else { return .zero }
@@ -147,8 +148,10 @@ struct LineCap: Layout {
         guard strict else { return size }
         let overflow = CGSize(width: size.width, height: WidgetFit.overflow)
         if size.height > maxHeight + 0.5 { return overflow }
+        // 2 pt Spielraum: Ein Wort, das rechnerisch knapp passt, bricht SwiftUI sonst doch noch
+        // vor dem letzten Buchstaben um („Verwaltungsgesellschaf / t“ in 128 pt).
         if let width = proposal.width, width.isFinite,
-           subviews.dropFirst().contains(where: { $0.sizeThatFits(.unspecified).width > width + 0.5 }) {
+           subviews.dropFirst().contains(where: { $0.sizeThatFits(.unspecified).width > width - wordSlack }) {
             return overflow
         }
         return size
@@ -164,13 +167,13 @@ struct LineCap: Layout {
 }
 
 /// Text, der am Wortende umbrechen darf, aber höchstens `lines` Zeilen hat. `words` sind die
-/// Wörter, die nicht mitten im Wort brechen dürfen (Namen); gemessen im Gewicht `semibold`.
+/// Wörter, die nicht mitten im Wort brechen dürfen (Namen), je im Gewicht, in dem sie stehen.
 struct CappedText: View {
     @Environment(\.widgetStrictFit) private var strict
     let text: Text
     let font: WidgetFont
     let lines: Int
-    var words: [String] = []
+    var words: [Word] = []
 
     var body: some View {
         // Halbe Zeile Spielraum: SF Pro misst je Zeile etwas mehr als die Tabellenhöhe.
@@ -178,20 +181,73 @@ struct CappedText: View {
             text.fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             ForEach(Array(words.enumerated()), id: \.offset) { _, word in
-                Text(word).font(font.font(.semibold)).fixedSize().hidden()
+                Text(word.text).font(font.font(word.weight)).fixedSize().hidden()
             }
         }
     }
 }
 
-/// Wörter eines Namens für `CappedText(words:)`.
-func nameWords(_ name: String) -> [String] {
+/// Ein Wort, das nicht mitten im Wort brechen darf, mit dem Gewicht, in dem es gesetzt ist.
+struct Word: Hashable {
+    let text: String
+    let weight: Font.Weight
+}
+
+/// Wörter eines Namens, alle im selben Gewicht (z. B. Kontoname als Titel, semibold).
+func nameWords(_ name: String, weight: Font.Weight = .semibold) -> [Word] {
     name.split(whereSeparator: \.isWhitespace).map(String.init).filter { $0 != "·" }
+        .map { Word(text: $0, weight: weight) }
+}
+
+/// Wörter eines Titels wie `titleText`: Anbieter semibold, Kontoteil regular.
+func titleWords(_ title: WidgetTitle) -> [Word] {
+    nameWords(title.provider) + (title.account.map { nameWords($0, weight: .regular) } ?? [])
 }
 
 extension Text {
     func token(_ font: WidgetFont, weight: Font.Weight? = nil) -> Text {
         self.font(font.font(weight))
+    }
+}
+
+/// Einzeiliger Text: in den strengen Stufen fester Rahmen in Zeilenhöhe und `fixedSize`
+/// (passt er nicht, scheitert die Stufe über `OneLine`). In der letzten Stufe bricht er statt
+/// dessen um, damit nichts am Rand abgeschnitten wird.
+private struct LineBox: ViewModifier {
+    @Environment(\.widgetStrictFit) private var strict
+    let font: WidgetFont
+
+    func body(content: Content) -> some View {
+        if strict {
+            content.frame(height: font.lineHeight).fixedSize()
+        } else {
+            content.fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// Feste Zeilenhöhe einer Reihe; in der letzten Stufe nur als Mindesthöhe, damit umgebrochene
+/// Texte Platz haben.
+private struct RowBox: ViewModifier {
+    @Environment(\.widgetStrictFit) private var strict
+    let height: CGFloat
+
+    func body(content: Content) -> some View {
+        if strict {
+            content.frame(height: height)
+        } else {
+            content.frame(minHeight: height)
+        }
+    }
+}
+
+extension View {
+    func lineBox(_ font: WidgetFont) -> some View {
+        modifier(LineBox(font: font))
+    }
+
+    func rowBox(_ height: CGFloat) -> some View {
+        modifier(RowBox(height: height))
     }
 }
 
@@ -214,7 +270,7 @@ struct Line: View {
 
     var body: some View {
         OneLine {
-            text.frame(height: font.lineHeight).fixedSize()
+            text.lineBox(font)
         }
     }
 }
@@ -314,16 +370,16 @@ struct HeaderLine: View {
     var row: some View {
         HStack(spacing: 0) {
             RobotIcon(size: WidgetMetric.robot)
-            titleText(title, .title).frame(height: WidgetFont.title.lineHeight).fixedSize()
+            titleText(title, .title).lineBox(.title)
                 .padding(.leading, WidgetSpace.small)
             if let detail, !detail.isEmpty {
-                detail.textView.monospacedDigit().frame(height: WidgetFont.meta.lineHeight).fixedSize()
+                detail.textView.monospacedDigit().lineBox(.meta)
                     .padding(.leading, WidgetSpace.small)
             }
             Spacer(minLength: WidgetSpace.small)
             StatusDot(severity: severity)
         }
-        .frame(height: 16)
+        .rowBox(16)
     }
 }
 
@@ -337,7 +393,7 @@ struct HeaderTwoLines: View {
         VStack(alignment: .leading, spacing: 2) {
             HeaderLine(title: title, detail: nil, severity: severity)
             OneLine {
-                detail.textView.monospacedDigit().frame(height: WidgetFont.meta.lineHeight).fixedSize()
+                detail.textView.monospacedDigit().lineBox(.meta)
             }
             .padding(.leading, WidgetMetric.headerIndent)
         }
@@ -352,7 +408,7 @@ struct HeaderWrapped: View {
         /// „Claude ·“ / „Kunde A“
         case split(WidgetTitle)
         /// Umbruch am Wortende, höchstens zwei Zeilen; `words` dürfen nicht brechen.
-        case wrapping(Text, words: [String])
+        case wrapping(Text, words: [Word])
     }
 
     let title: Title
@@ -370,16 +426,16 @@ struct HeaderWrapped: View {
                     OneLine {
                         HStack(spacing: 0) {
                             if let detail, !detail.isEmpty {
-                                detail.textView.monospacedDigit().frame(height: WidgetFont.meta.lineHeight).fixedSize()
+                                detail.textView.monospacedDigit().lineBox(.meta)
                             }
                             Spacer(minLength: WidgetSpace.small)
                             StatusDot(severity: severity)
                         }
-                        .frame(height: WidgetFont.meta.lineHeight)
+                        .rowBox(WidgetFont.meta.lineHeight)
                     }
                 } else if let detail, !detail.isEmpty {
                     OneLine {
-                        detail.textView.monospacedDigit().frame(height: WidgetFont.meta.lineHeight).fixedSize()
+                        detail.textView.monospacedDigit().lineBox(.meta)
                     }
                 }
             }
@@ -447,15 +503,15 @@ struct MeterBlock: View {
 
     private func nameRow(scope: String?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
-            Text(window.name).token(.row).frame(height: WidgetFont.row.lineHeight).fixedSize()
+            Text(window.name).token(.row).lineBox(.row)
             if let scope {
-                Text(scope).token(.meta).foregroundStyle(.secondary).fixedSize()
+                Text(scope).token(.meta).foregroundStyle(.secondary).lineBox(.meta)
                     .padding(.leading, WidgetSpace.small)
             }
             Spacer(minLength: WidgetSpace.small)
             PercentLabel(window: window)
         }
-        .frame(height: WidgetFont.row.lineHeight)
+        .rowBox(WidgetFont.row.lineHeight)
     }
 }
 
@@ -483,14 +539,14 @@ struct ShortMeter: View {
     var body: some View {
         OneLine {
             HStack(spacing: WidgetSpace.medium) {
-                Text(window.name).token(.row).frame(height: WidgetFont.row.lineHeight).fixedSize()
+                Text(window.name).token(.row).lineBox(.row)
                 MeterBar(percent: window.percent, elapsed: window.elapsedFraction(now: now),
                          color: window.severity.color, markHeight: WidgetMetric.shortMark)
                     .frame(minWidth: 24)
                     .frame(height: WidgetMetric.shortBar)
                 PercentLabel(window: window)
             }
-            .frame(height: WidgetFont.row.lineHeight)
+            .rowBox(WidgetFont.row.lineHeight)
         }
     }
 }

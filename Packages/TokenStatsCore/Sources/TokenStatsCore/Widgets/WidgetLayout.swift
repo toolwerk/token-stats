@@ -63,14 +63,13 @@ public struct WidgetTitle: Equatable, Sendable {
 
 /// Welche Limits ein Widget zeigt, wenn nicht alle Platz haben.
 public enum LimitPick {
-    /// Die `count` knappsten Limits, in der Reihenfolge der App; dazu, wie viele wegfallen.
-    /// Bei Gleichstand gewinnt das weiter vorn stehende.
+    /// Welche Limits eine Stufe zeigt; dazu, wie viele wegfallen. Passen alle, bleibt die
+    /// Reihenfolge der App. Passt nur ein Teil (klein, M3, L2, X3), sind es die `count`
+    /// knappsten, absteigend nach Prozent (Entscheidung 27.11.2026). Bei Gleichstand gewinnt das
+    /// in der App weiter vorn stehende.
     public static func tightest(_ windows: [LimitWindow], count: Int) -> (shown: [LimitWindow], hidden: Int) {
         guard windows.count > count else { return (windows, 0) }
-        let keep = windows.indices
-            .sorted { windows[$0].percent != windows[$1].percent ? windows[$0].percent > windows[$1].percent : $0 < $1 }
-            .prefix(max(count, 0))
-        let shown = keep.sorted().map { windows[$0] }
+        let shown = descending(windows, count: count)
         return (shown, windows.count - shown.count)
     }
 
@@ -112,15 +111,28 @@ public enum WidgetText {
     }
 
     /// „+7 weitere Konten · höchstens 26 %“. Weil die Tabelle absteigend sortiert ist, steckt
-    /// darin nie ein knapperes Konto als die gezeigten.
+    /// darin nie ein knapperes Konto als die gezeigten. Fehlerkonten stehen oben und landen nur
+    /// in der Sammelzeile, wenn schon die Fehler mehr Zeilen brauchen: dann „· 2 mit Fehler“.
     public static func moreAccounts(_ rest: [WidgetSnapshot.Provider], accounts: Bool) -> String {
         let count = rest.count
         let noun = accounts
             ? (count == 1 ? "weiteres Konto" : "weitere Konten")
             : (count == 1 ? "weiterer Anbieter" : "weitere Anbieter")
-        let head = "+\(count) \(noun)"
-        guard let highest = rest.compactMap(\.tightestPercent).max() else { return head }
-        return "\(head) · höchstens \(Format.percent(highest))"
+        var parts = ["+\(count) \(noun)"]
+        if let highest = rest.compactMap(\.tightestPercent).max() {
+            parts.append("höchstens \(Format.percent(highest))")
+        }
+        let failing = rest.filter { $0.tightestPercent == nil }.count
+        if failing > 0 {
+            parts.append("\(failing) mit Fehler")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Zweite Zeile unter dem Kontonamen in L5/X5-kurz, wenn die Spalte für den Limitnamen
+    /// fehlt: „Woche“, bei pausierter Abfrage „Woche · pausiert“ (mit Pause-Symbol davor).
+    public static func limitLine(_ window: LimitWindow, paused: Bool) -> String {
+        paused ? "\(window.name) · pausiert" : window.name
     }
 
     /// „+3 weitere Modelle“ unter den Modellzeilen des großen Verbrauchs-Widgets.

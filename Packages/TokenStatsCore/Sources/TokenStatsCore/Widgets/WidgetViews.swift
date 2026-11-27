@@ -422,9 +422,9 @@ private struct ModelRow: View {
 
     private func head(withDetail: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
-            Text(ModelName.display(line.model)).token(.row).frame(height: WidgetFont.row.lineHeight).fixedSize()
+            Text(ModelName.display(line.model)).token(.row).lineBox(.row)
             if withDetail {
-                Text(detail).token(.meta).foregroundStyle(.secondary).monospacedDigit().fixedSize()
+                Text(detail).token(.meta).foregroundStyle(.secondary).monospacedDigit().lineBox(.meta)
                     .padding(.leading, WidgetSpace.medium)
             }
             Spacer(minLength: WidgetSpace.medium)
@@ -436,7 +436,7 @@ private struct ModelRow: View {
                     .fixedSize()
             }
         }
-        .frame(height: WidgetFont.row.lineHeight)
+        .rowBox(WidgetFont.row.lineHeight)
     }
 }
 
@@ -520,7 +520,7 @@ private struct LimitsSingle: View {
             } content: { FailureNote(message: noDataMessage) }
         } last: {
             Stage(snapshot: snapshot) {
-                HeaderWrapped(title: .wrapping(titleText(title, .title), words: nameWords(title.full)), detail: nil, severity: nil)
+                HeaderWrapped(title: .wrapping(titleText(title, .title), words: titleWords(title)), detail: nil, severity: nil)
             } content: { FailureNote(message: noDataMessage) }
         }
     }
@@ -546,7 +546,7 @@ private struct LimitsSingle: View {
         // Mittel: Fallen Limits weg (mehr als vier), sagt der Kopf es. Klein zeigt bewusst nur
         // die zwei knappsten, ohne Hinweis – die übrigen stehen im mittleren Widget und in der App.
         let fullDetail = medium && pick.hidden > 0 ? detail.with(prefix: WidgetText.hiddenLimitsInApp(pick.hidden)) : detail
-        let words = nameWords(title.account ?? title.full)
+        let words = title.account.map { nameWords($0) } ?? titleWords(title)
         StageLadder {
             // S1/M1: Kopf einzeilig mit Detail, alle (bzw. die knappsten) Meter-Blöcke.
             Stage(snapshot: snapshot) {
@@ -607,7 +607,7 @@ private struct LimitsSingle: View {
     }
 
     private func wrappedTitle(_ title: WidgetTitle) -> HeaderWrapped.Title {
-        title.account == nil ? .wrapping(titleText(title, .title), words: nameWords(title.full)) : .split(title)
+        title.account == nil ? .wrapping(titleText(title, .title), words: titleWords(title)) : .split(title)
     }
 
     private func lastTitle(_ title: WidgetTitle) -> Text {
@@ -621,7 +621,7 @@ private struct LimitsSingle: View {
     /// F1: Kopf und Hinweis („Anmeldung abgelaufen …“) statt Metern.
     private func failure(title: WidgetTitle, detail: HeaderDetail) -> some View {
         let message = provider.message ?? noDataMessage
-        let words = nameWords(title.account ?? title.full)
+        let words = title.account.map { nameWords($0) } ?? titleWords(title)
         return StageLadder {
             Stage(snapshot: snapshot) {
                 HeaderLine(title: title, detail: detail, severity: nil)
@@ -726,7 +726,8 @@ private struct LimitsLarge: View {
 
     private func table(_ ordered: [WidgetSnapshot.Provider], shown: Int, limitColumn: Bool, _ accounts: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            AccountTable(rows: Array(ordered.prefix(shown)), limitColumn: limitColumn, accounts: accounts, now: now)
+            AccountTable(rows: Array(ordered.prefix(shown)), limitColumn: limitColumn, accounts: accounts,
+                         probes: Array(ordered.dropFirst(shown)), now: now)
             if shown < ordered.count {
                 MoreAccounts(rest: Array(ordered.dropFirst(shown)), accounts: accounts)
             }
@@ -778,7 +779,8 @@ private struct LimitsExtraLarge: View {
         let left = ColumnSplit.halves(rows.count)
         return VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: WidgetSpace.column) {
-                AccountTable(rows: Array(rows.prefix(left)), limitColumn: limitColumn, accounts: accounts, now: now)
+                AccountTable(rows: Array(rows.prefix(left)), limitColumn: limitColumn, accounts: accounts,
+                             probes: Array(ordered.dropFirst(shown)), now: now)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                 AccountTable(rows: Array(rows.dropFirst(left)), limitColumn: limitColumn, accounts: accounts, now: now)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -836,23 +838,23 @@ private struct AccountSection: View {
 
     private func head(hidden: Int) -> some View {
         HStack(spacing: 0) {
-            titleText(WidgetTitle(provider.name), .row).frame(height: WidgetFont.row.lineHeight).fixedSize()
+            titleText(WidgetTitle(provider.name), .row).lineBox(.row)
             let detail = HeaderDetail.plan(provider.snapshot?.account?.plan, paused: provider.isRateLimited)
             if !detail.isEmpty {
-                detail.textView.frame(height: WidgetFont.meta.lineHeight).fixedSize()
+                detail.textView.lineBox(.meta)
                     .padding(.leading, WidgetSpace.small)
             }
             Spacer(minLength: WidgetSpace.small)
             if hidden > 0 {
                 Text(WidgetText.hiddenLimits(hidden)).token(.meta).foregroundStyle(.secondary)
-                    .frame(height: WidgetFont.meta.lineHeight).fixedSize()
+                    .lineBox(.meta)
                     .padding(.trailing, WidgetSpace.small)
             }
             if showDot && !provider.isFailing {
                 StatusDot(severity: provider.snapshot?.tightestWindow?.severity)
             }
         }
-        .frame(height: WidgetFont.row.lineHeight)
+        .rowBox(WidgetFont.row.lineHeight)
     }
 }
 
@@ -864,6 +866,10 @@ private struct AccountTable: View {
     let limitColumn: Bool
     let accounts: Bool
     var secondLimit = false
+    /// Konten in der Sammelzeile: Ihre Namen werden unsichtbar in derselben Spaltenbreite
+    /// geprüft. Passt dort ein Wort nicht, scheitert die Stufe, und L5/X5-kurz mit breiterer
+    /// Namensspalte übernimmt, statt das Konto nur wegen der Breite zu verstecken.
+    var probes: [WidgetSnapshot.Provider] = []
     let now: Date
 
     private var group: CGFloat {
@@ -876,6 +882,19 @@ private struct AccountTable: View {
     }
 
     var body: some View {
+        ProbeLayout {
+            table
+            ForEach(probes) { provider in
+                HStack(spacing: WidgetSpace.medium) {
+                    nameCell(provider, window: nil)
+                    Color.clear.frame(width: span, height: 0)
+                }
+                .hidden()
+            }
+        }
+    }
+
+    private var table: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: WidgetSpace.medium) {
                 Line(accounts ? "Konto" : "Anbieter", .meta, color: .secondary)
@@ -900,16 +919,13 @@ private struct AccountTable: View {
     private func row(_ provider: WidgetSnapshot.Provider) -> some View {
         let windows = LimitPick.descending(provider.snapshot?.windows ?? [], count: secondLimit ? 2 : 1)
         return HStack(alignment: .center, spacing: WidgetSpace.medium) {
-            CappedText(text: titleText(WidgetTitle(provider.name), .row), font: .row, lines: 2,
-                       words: nameWords(provider.name))
-                .frame(maxWidth: .infinity, alignment: .leading)
+            nameCell(provider, window: windows.first)
             if windows.isEmpty {
-                // Fehlerkonto: Hinweis über den Limitspalten, wenn er passt, sonst kurz.
-                ViewThatFits(in: .horizontal) {
-                    failure(provider.message ?? "kein Stand")
-                    failure("kein Stand")
-                }
-                .frame(width: span, alignment: .leading)
+                // Fehlerkonto: Hinweis über den Limitspalten, bei Bedarf zweizeilig – nie gekürzt.
+                CappedText(text: warningSymbol() + Text(" ")
+                               + Text(provider.message ?? "Noch kein Stand.").token(.meta).foregroundStyle(.secondary),
+                           font: .meta, lines: 2)
+                    .frame(width: span, alignment: .leading)
             } else {
                 HStack(spacing: WidgetSpace.column) {
                     cells(windows[0], paused: provider.isRateLimited)
@@ -927,17 +943,29 @@ private struct AccountTable: View {
         .frame(minHeight: WidgetMetric.tableRow)
     }
 
-    /// Limitname (70) · Balken 4 (72) · Prozent (34); bei pausierter Abfrage das Pause-Symbol
-    /// vor dem Limitnamen.
+    /// Name, höchstens drei Zeilen, Umbruch nur am „·“ und an Wortgrenzen. L5/X5-kurz: Ohne
+    /// Spalte steht der Limitname als zweite Zeile darunter – er fällt nie weg.
+    private func nameCell(_ provider: WidgetSnapshot.Provider, window: LimitWindow?) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            CappedText(text: titleText(WidgetTitle(provider.name), .row), font: .row, lines: 3,
+                       words: titleWords(WidgetTitle(provider.name)))
+            if !limitColumn, let window {
+                Line((pauseSymbol(provider.isRateLimited)
+                      + Text(WidgetText.limitLine(window, paused: provider.isRateLimited)))
+                    .token(.meta).foregroundStyle(.secondary), .meta)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Limitname (70) · Balken 4 (72) · Prozent (38). Bei pausierter Abfrage steht das
+    /// Pause-Symbol vor dem Limitnamen; passt beides nicht in die Spalte, scheitert die Stufe,
+    /// statt dass der Name wegfällt.
     private func cells(_ window: LimitWindow, paused: Bool) -> some View {
         HStack(spacing: WidgetSpace.medium) {
             if limitColumn {
-                let pause = paused ? Text(Image(systemName: "pause.fill")).font(.system(size: 9)) + Text(" ") : Text("")
-                ViewThatFits(in: .horizontal) {
-                    Line((pause + Text(window.name)).token(.meta).foregroundStyle(.secondary), .meta)
-                    Line(pause.foregroundStyle(.secondary), .meta)
-                }
-                .frame(width: WidgetMetric.limitColumn, alignment: .leading)
+                Line((pauseSymbol(paused) + Text(window.name)).token(.meta).foregroundStyle(.secondary), .meta)
+                    .frame(width: WidgetMetric.limitColumn, alignment: .leading)
             }
             MeterBar(percent: window.percent, elapsed: window.elapsedFraction(now: now),
                      color: window.severity.color, markHeight: WidgetMetric.shortMark)
@@ -947,10 +975,8 @@ private struct AccountTable: View {
         }
     }
 
-    private func failure(_ text: String) -> some View {
-        (warningSymbol() + Text(" ") + Text(text).token(.meta).foregroundStyle(.secondary))
-            .frame(height: WidgetFont.meta.lineHeight)
-            .fixedSize()
+    private func pauseSymbol(_ paused: Bool) -> Text {
+        paused ? Text(Image(systemName: "pause.fill")).font(.system(size: 9)) + Text(" ") : Text("")
     }
 }
 
@@ -964,5 +990,26 @@ private struct MoreAccounts: View {
             .token(.meta).foregroundStyle(.secondary).monospacedDigit(), font: .meta, lines: 2)
             .padding(.vertical, WidgetSpace.tight)
             .frame(minHeight: WidgetMetric.tableRow, alignment: .leading)
+    }
+}
+
+/// Erstes Kind ist der Inhalt, die übrigen sind unsichtbare Proben: Meldet eine Probe
+/// „passt nicht“ (Höhe `WidgetFit.overflow`), scheitert der ganze Inhalt.
+private struct ProbeLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        let size = content.sizeThatFits(proposal)
+        let failed = subviews.dropFirst().contains {
+            $0.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil)).height >= WidgetFit.overflow
+        }
+        return failed ? CGSize(width: size.width, height: WidgetFit.overflow) : size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, anchor: .topLeading,
+                              proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+        for probe in subviews.dropFirst() {
+            probe.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: 0))
+        }
     }
 }
