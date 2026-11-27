@@ -54,13 +54,17 @@ LIMITS_CACHE = f"{ICON_DIR}/limits.json"
 _LIMITS_LOCK = threading.Lock()
 
 GREEN, YELLOW, RED = (0.30, 0.75, 0.50), (0.89, 0.66, 0.24), (0.85, 0.30, 0.30)
+# Rot für Sätze (nicht für Balken und Prozente): auf dem festen Grund #1e1e1e hat RED (#d94c4c) nur 4,0:1,
+# #f59a8a 7,8:1 – dieselbe Textfarbe wie auf macOS und Windows im Dunkeln
+RED_TEXT = "#f59a8a"
 BLUE, BLUE_DIM, GREY = (0.0, 0.57, 1.0), (0.06, 0.37, 0.64), (0.55, 0.55, 0.55)
 WINDOWS = {"session": 5 * 3600, "weekly_all": 7 * 86400, "weekly_scoped": 7 * 86400}
 
 # Zustand eines Kontoeintrags und Texte (Textkatalog „Mehrere Konten“, Abschnitte „Modell“ und „Linux“)
 OK, MISSING_FOLDER = "ok", "missingFolder"
-MISSING_FOLDER_TEXT = ("Ordner nicht gefunden: {path}. "
-                       "Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.")
+# Wie in den Einstellungen auf macOS und Windows; der Pfad steht darüber auf eigener Zeile (Feld „folder“)
+MISSING_FOLDER_TEXT = ("Ordner nicht gefunden. Das Konto steht grau im Menü. "
+                       "Ist das Laufwerk eingehängt, wird es wieder abgefragt.")
 MISSING_FOLDER_HINT = "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfernen, wenn es ihn nicht mehr gibt."
 EMPTY_TITLE = "Kein Claude-Konto gefunden"
 
@@ -244,7 +248,7 @@ def account_view(account, info, note, count):
             "folder": short_path(account["dir"]) if account["folder"] else None,
             "info": info, "note": note, "pct": worst_pct(info),
             "problem": missing or (not info and bool(note)),
-            "missing": MISSING_FOLDER_TEXT.format(path=short_path(account["dir"])) if missing else None,
+            "missing": MISSING_FOLDER_TEXT if missing else None,
             "missingHint": MISSING_FOLDER_HINT if missing else None}
 
 
@@ -837,7 +841,9 @@ class Popup(Gtk.Window):
         account = self.app.account()
         if account and account["state"] == MISSING_FOLDER:
             self.body.pack_start(label(account["title"], "ts-h", wrap=True), False, False, 0)
-            self.body.pack_start(markup(label(account["missing"], wrap=True), hexc(RED)), False, False, 0)
+            # Pfad wie in den Einstellungen auf macOS und Windows: eigene Zeile in Monospace, bricht wie ein Befehl um
+            self.body.pack_start(CommandLabel(account["folder"]), False, False, 0)
+            self.body.pack_start(markup(label(account["missing"], wrap=True), RED_TEXT), False, False, 0)
             self.body.pack_start(label(account["missingHint"], "ts-dim", wrap=True), False, False, 0)
             return
         info = account and account["info"]

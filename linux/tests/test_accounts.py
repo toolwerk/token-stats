@@ -23,8 +23,8 @@ BACKEND = os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "co
 GTK = os.path.join(LINUX, "gtk", "tokenstats.py")
 
 # Texte aus dem Textkatalog „Mehrere Konten“, Abschnitt „Linux“
-MISSING_TEXT = ("Ordner nicht gefunden: {path}. "
-                "Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.")
+MISSING_TEXT = ("Ordner nicht gefunden. Das Konto steht grau im Menü. "
+                "Ist das Laufwerk eingehängt, wird es wieder abgefragt.")
 MISSING_HINT = "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfernen, wenn es ihn nicht mehr gibt."
 EMPTY_TITLE = "Kein Claude-Konto gefunden"
 EMPTY_TEXT = "Melde dich mit »claude« an. Weitere Ordner: TOKENSTATS_CLAUDE_DIRS=/pfad/eins:/pfad/zwei"
@@ -217,7 +217,8 @@ class ViewTest(unittest.TestCase):
                 self.assertTrue(v["problem"])
                 self.assertIsNone(v["pct"])
                 self.assertEqual(v["title"], "Claude · claude-arbeit")
-                self.assertEqual(v["missing"], MISSING_TEXT.format(path="~/usb/claude-arbeit"))
+                self.assertEqual(v["missing"], MISSING_TEXT)
+                self.assertEqual(v["folder"], "~/usb/claude-arbeit")   # steht auf eigener Zeile darüber
                 self.assertEqual(v["missingHint"], MISSING_HINT)
 
     def test_problem_flags(self):
@@ -256,6 +257,34 @@ class ViewTest(unittest.TestCase):
         self.assertIn(f'"{EMPTY_TITLE}"', qml)
         self.assertIn("view.info.emptyParts", qml)
         self.assertNotIn("»", qml)   # Befehle kommen als Teile aus dem Backend, nie in »…« im Text
+
+
+def _luminance(hexcolor):
+    channels = [int(hexcolor.lstrip("#")[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    channels = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+
+def contrast(a, b):
+    high, low = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+class ContrastTest(unittest.TestCase):
+    """Rote Sätze mit mindestens 4,5:1 (WCAG AA): GTK auf festem Grund #1e1e1e, Plasma je Breeze-Thema."""
+
+    def test_gtk_red_text(self):
+        self.assertGreaterEqual(contrast(gtk.RED_TEXT, "#1e1e1e"), 4.5)
+        self.assertLess(contrast(gtk.hexc(gtk.RED), "#1e1e1e"), 4.5)   # Gegenprobe: das Balkenrot reicht nicht
+
+    def test_plasma_red_text(self):
+        with open(os.path.join(LINUX, "plasma", "org.tokenstats.claude", "contents", "ui", "FullView.qml")) as f:
+            qml = f.read()
+        self.assertIn('darkTheme ? "#f59a8a" : "#952f1a"', qml)
+        self.assertGreaterEqual(contrast("#952f1a", "#eff0f1"), 4.5)   # Breeze hell
+        self.assertGreaterEqual(contrast("#f59a8a", "#202326"), 4.5)   # Breeze dunkel
+        self.assertLess(contrast("#da4453", "#eff0f1"), 4.5)   # Gegenprobe: negativeTextColor von Breeze
+        self.assertLess(contrast("#da4453", "#202326"), 4.5)
 
 
 class NoRequestTest(unittest.TestCase):
@@ -427,7 +456,7 @@ class BackendOutputTest(unittest.TestCase):
         missing = result["accounts"][2]
         self.assertEqual((missing["state"], missing["problem"], missing["pct"], missing["limits"]),
                          ("missingFolder", True, None, []))
-        self.assertEqual(missing["missing"], MISSING_TEXT.format(path="~/usb/claude-arbeit"))
+        self.assertEqual((missing["missing"], missing["folder"]), (MISSING_TEXT, "~/usb/claude-arbeit"))
         self.assertEqual(result["accounts"][1]["pct"], 88)
         self.assertFalse(result["accounts"][1]["problem"])
         self.assertEqual(result["accounts"][1]["errorParts"], [])

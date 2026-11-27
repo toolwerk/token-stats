@@ -41,9 +41,10 @@ Every `CLAUDE_CONFIG_DIR` is an account of its own (SPEC §6 "Mehrere Konten je 
   the next line whole when it fits there; continuation lines are indented by two characters. The backend's `text_parts()` splits a hint into sentence parts and commands
   (`»…«`), `wrap_command()` (and `wrapCommand()` in `util.js`) does the wrapping.
 - A folder from `TOKENSTATS_CLAUDE_DIRS` or `CLAUDE_CONFIG_DIR` that does not exist (an unmounted
-  drive, say) stays in the account bar, grey with "!", and is never queried. Its page says
-  "Ordner nicht gefunden: {pfad}. Ist das Laufwerk eingehängt, erscheint das Konto von selbst
-  wieder." and "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfernen, wenn es ihn nicht mehr
+  drive, say) stays in the account bar, grey with "!", and is never queried. Its page shows the path on its
+  own line in monospace, then in red "Ordner nicht gefunden. Das Konto steht grau im Menü. Ist das
+  Laufwerk eingehängt, wird es wieder abgefragt." (the same sentence as in the macOS and Windows
+  settings) and "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfernen, wenn es ihn nicht mehr
   gibt." Automatically found folders only count while they exist.
 - No account at all: "Kein Claude-Konto gefunden" with "Melde dich mit »claude« an. Weitere Ordner:
   TOKENSTATS_CLAUDE_DIRS=/pfad/eins:/pfad/zwei".

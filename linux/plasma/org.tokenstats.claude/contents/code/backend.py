@@ -26,8 +26,9 @@ WINDOWS = {"session": 5 * 3600, "weekly_all": 7 * 86400, "weekly_scoped": 7 * 86
 
 # Zustand eines Kontoeintrags (Textkatalog „Mehrere Konten“, Abschnitt „Modell“)
 OK, MISSING_FOLDER = "ok", "missingFolder"
-MISSING_FOLDER_TEXT = ("Ordner nicht gefunden: {path}. "
-                       "Ist das Laufwerk eingehängt, erscheint das Konto von selbst wieder.")
+# Wie in den Einstellungen auf macOS und Windows; der Pfad steht darüber auf eigener Zeile (Feld „folder“)
+MISSING_FOLDER_TEXT = ("Ordner nicht gefunden. Das Konto steht grau im Menü. "
+                       "Ist das Laufwerk eingehängt, wird es wieder abgefragt.")
 MISSING_FOLDER_HINT = "Kommt der Ordner aus TOKENSTATS_CLAUDE_DIRS, dort entfernen, wenn es ihn nicht mehr gibt."
 NO_INFO = {"plan": "", "limits": [], "extra": None}
 
@@ -190,7 +191,7 @@ def account_view(account, info, error, count):
             "folder": short_path(account["dir"]) if account["folder"] else None,
             "info": info, "error": error, "errorParts": text_parts(error), "pct": worst_pct(info),
             "problem": missing or (not info and bool(error)),
-            "missing": MISSING_FOLDER_TEXT.format(path=short_path(account["dir"])) if missing else None,
+            "missing": MISSING_FOLDER_TEXT if missing else None,
             "missingHint": MISSING_FOLDER_HINT if missing else None}
 
 

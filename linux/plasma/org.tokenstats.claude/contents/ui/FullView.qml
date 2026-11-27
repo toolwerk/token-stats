@@ -31,6 +31,12 @@ ColumnLayout {
     Layout.preferredWidth: Kirigami.Units.gridUnit * 24
     Layout.preferredHeight: Kirigami.Units.gridUnit * 34
 
+    // Rot für Sätze (Ordner fehlt): Kirigami.Theme.negativeTextColor (Breeze #da4453) hat auf Breeze hell
+    // (#eff0f1) 3,7:1 und auf Breeze dunkel (#202326) 3,7:1. Ein Rot für beide gibt es nicht; darum je nach
+    // Helligkeit des Grunds die Textfarben von macOS und Windows: #952f1a hell 6,8:1, #f59a8a dunkel 7,4:1.
+    readonly property bool darkTheme: Kirigami.ColorUtils.brightnessForColor(Kirigami.Theme.backgroundColor) === Kirigami.ColorUtils.Dark
+    readonly property color errorTextColor: darkTheme ? "#f59a8a" : "#952f1a"
+
     function tint(pct) {
         return pct >= 100 ? Kirigami.Theme.negativeTextColor
              : pct >= 80 ? Kirigami.Theme.neutralTextColor : Kirigami.Theme.positiveTextColor
@@ -211,11 +217,17 @@ ColumnLayout {
                 wrapMode: Text.Wrap
                 elide: Text.ElideNone
             }
+            // Pfad wie in den Einstellungen auf macOS und Windows: eigene Zeile in Monospace, bricht wie ein Befehl um
+            PartsText {
+                parts: view.acc.folder ? [{ kind: "cmd", text: view.acc.folder }] : []
+                Layout.fillWidth: true
+                opacity: 0.7
+            }
             PC3.Label {
                 text: view.acc.missing || ""
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
-                color: Kirigami.Theme.negativeTextColor
+                color: view.errorTextColor
             }
             PC3.Label {
                 text: view.acc.missingHint || ""
