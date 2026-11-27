@@ -120,7 +120,8 @@ public struct UsageWidgetView: View {
     }
 
     private var title: WidgetTitle {
-        WidgetTitle(provider.flatMap { snapshot?.provider($0)?.name } ?? "Verbrauch")
+        // Gewählter Anbieter ohne Stand: sein Anzeigename, nie die Kennung.
+        WidgetTitle(provider.map { ProviderName.display($0, in: snapshot) } ?? "Verbrauch")
     }
 
     @ViewBuilder
@@ -487,7 +488,7 @@ public struct LimitsWidgetView: View {
                 if let shown = Self.resolve(snapshot, provider: provider) {
                     LimitsSingle(snapshot: snapshot, provider: shown, medium: size == .medium, now: now)
                 } else {
-                    LimitsSingle.missing(snapshot: snapshot, name: provider.map { WidgetTitle($0) })
+                    LimitsSingle.missing(snapshot: snapshot, name: provider.map { WidgetTitle(ProviderName.display($0, in: snapshot)) })
                 }
             }
         } else {

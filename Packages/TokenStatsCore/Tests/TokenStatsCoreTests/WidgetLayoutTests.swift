@@ -203,6 +203,19 @@ struct WidgetResolveTests {
         #expect(LimitsWidgetView.resolve(snapshot, provider: "unbekannt") == nil)
     }
 
+    @Test("Gewählter Anbieter ohne Stand: Anzeigename statt Kennung")
+    func displayName() {
+        var empty = DemoData.widgetSnapshot(now: now)
+        empty.providers = []
+        #expect(ProviderName.display("claude", in: empty) == "Claude")
+        #expect(ProviderName.display("antigravity") == "Antigravity")
+        #expect(ProviderName.display("neu") == "Neu")
+        // Mit Stand zählt der Name aus dem Stand (mit Konten: „Claude · Privat“).
+        let accounts = DemoData.accountsSnapshot(now: now, count: 8)
+        #expect(ProviderName.display("claude", in: accounts) == "Claude · Privat")
+        #expect(DemoData.providerNames.map(\.name) == ["Antigravity", "Claude", "Codex", "Ollama"])
+    }
+
     @Test("Farbschwellen kommen aus Severity: ab 80 % warn, erst ab 100 % crit; Demo hat ein Konto auf 100 %")
     func severity() {
         #expect(Severity(percent: 0.79) == .ok)

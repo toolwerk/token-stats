@@ -61,6 +61,22 @@ public struct WidgetTitle: Equatable, Sendable {
     }
 }
 
+/// Anzeigename eines Anbieters, wenn das Widget nur seine Kennung kennt – etwa, wenn der im
+/// Widget gewählte Anbieter (noch) keinen Stand hat. Nie die Rohkennung („claude“) zeigen.
+public enum ProviderName {
+    /// Wie die Provider der App sie nennen, alphabetisch wie die Tabs.
+    public static let known: [(id: String, name: String)] = [
+        ("antigravity", "Antigravity"), ("claude", "Claude"), ("codex", "Codex"), ("ollama", "Ollama"),
+    ]
+
+    /// Name aus dem Stand, sonst der bekannte Anzeigename, sonst die Kennung mit großem Anfang.
+    public static func display(_ id: String, in snapshot: WidgetSnapshot? = nil) -> String {
+        if let name = snapshot?.provider(id)?.name { return name }
+        if let name = known.first(where: { $0.id == id })?.name { return name }
+        return id.prefix(1).uppercased() + id.dropFirst()
+    }
+}
+
 /// Welche Limits ein Widget zeigt, wenn nicht alle Platz haben.
 public enum LimitPick {
     /// Welche Limits eine Stufe zeigt; dazu, wie viele wegfallen. Passen alle, bleibt die

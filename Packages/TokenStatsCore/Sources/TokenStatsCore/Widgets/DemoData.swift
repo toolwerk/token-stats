@@ -62,9 +62,7 @@ public enum DemoData {
     }
 
     /// Anzeigenamen wie in den Providern der App, alphabetisch wie die Tabs.
-    public static let providerNames: [(id: String, name: String)] = [
-        ("antigravity", "Antigravity"), ("claude", "Claude"), ("codex", "Codex"), ("ollama", "Ollama"),
-    ]
+    public static let providerNames: [(id: String, name: String)] = ProviderName.known
 
     /// Listenpreise der Demo-Modelle, falls keine `pricing.json` im Bundle liegt (Widget-Vorschau).
     public static let prices = PriceTable(asOf: nil, models: [
