@@ -517,16 +517,16 @@ public struct LimitsWidgetView: View {
 
     @ViewBuilder
     private func section(_ provider: WidgetSnapshot.Provider, columns: Int, maxWindows: Int, compact: Bool) -> some View {
-        // Ist kein Platz für alle, die knappsten – in der Reihenfolge der App.
-        let all = provider.snapshot?.windows ?? []
-        let keep = Set(all.enumerated().sorted { $0.element.percent != $1.element.percent ? $0.element.percent > $1.element.percent : $0.offset < $1.offset }
-            .prefix(maxWindows).map(\.element.id))
-        let windows = all.filter { keep.contains($0.id) }
+        // Ist kein Platz für alle, die knappsten – in der Reihenfolge der App; die übrigen
+        // stehen als „+N Limits“ im Kopf.
+        let picked = LimitsAccounts.pick(provider.snapshot?.windows ?? [], maximum: maxWindows)
+        let windows = picked.shown
         // Die Spalten sind schmal; der Zusatz „7 d, alle Modelle“ passt nur im großen Widget.
         let showScope = size == .large
+        let plan = provider.isRateLimited ? "Abfrage pausiert" : provider.snapshot?.account?.plan
         WidgetHeader(
             title: provider.name,
-            detail: provider.isRateLimited ? "Abfrage pausiert" : provider.snapshot?.account?.plan,
+            detail: [plan, LimitsAccounts.hiddenLimitsText(picked.hidden)].compactMap { $0 }.joined(separator: " · ").nilIfEmpty,
             severity: provider.snapshot?.tightestWindow?.severity,
             selection: size == .large ? nil : selectionDetail
         )

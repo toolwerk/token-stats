@@ -131,6 +131,29 @@ public enum LimitsAccounts {
         return all.filter { $0.title.localizedStandardContains(needle) }
     }
 
+    // MARK: Kleines und mittleres Widget
+
+    /// Die Limits, die ein Konto im Widget zeigt: alle, wenn sie passen, sonst die `maximum`
+    /// knappsten in der Reihenfolge der App. `hidden` zählt die weggelassenen – sie stehen als
+    /// „+1 Limit“ bzw. „+2 Limits“ im Kopf und fallen nie still weg (Sven, 27.11.2026).
+    public static func pick(_ windows: [LimitWindow], maximum: Int) -> (shown: [LimitWindow], hidden: Int) {
+        guard windows.count > maximum else { return (windows, 0) }
+        let keep = Set(windows.enumerated()
+            .sorted { $0.element.percent != $1.element.percent ? $0.element.percent > $1.element.percent : $0.offset < $1.offset }
+            .prefix(max(maximum, 0)).map(\.element.id))
+        let shown = windows.filter { keep.contains($0.id) }
+        return (shown, windows.count - shown.count)
+    }
+
+    /// „+1 Limit“, „+2 Limits“; `nil` ohne weggelassene Limits.
+    public static func hiddenLimitsText(_ count: Int) -> String? {
+        switch count {
+        case ..<1: nil
+        case 1: "+1 Limit"
+        default: "+\(count) Limits"
+        }
+    }
+
     // MARK: Großes Widget
 
     /// Eine Zeile der Tabelle „Konto | Knappstes Limit“.
