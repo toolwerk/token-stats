@@ -441,8 +441,11 @@ UserDefaults: `accountLabels` (ID → Text), `hiddenAccounts` (IDs), `accountFol
 Auftrag).
 
 **Befehle in Hinweisen** (in »…«) stehen auf allen Plattformen als eigene Zeile in
-Monospace und brechen nur an Leerzeichen um, nie mitten in `CLAUDE_CONFIG_DIR=~/.claude-2`
-(macOS `CommandText`, Windows `CommandText.cs`, Linux `text_parts`).
+Monospace und werden nie abgeschnitten. Umbrochen wird zuerst an Leerzeichen; ist ein Teil
+zu breit, nach `/ = _ - . :` (Windows zusätzlich `\`), ohne Trennstrich; erst als letzter
+Ausweg nach einem beliebigen Zeichen. Folgezeilen sind 2 Zeichen eingerückt. „Befehl
+kopieren“ kopiert den ganzen Befehl (macOS `CommandText`/`CommandWrap`, Windows
+`CommandText.cs`, Linux `wrap_command`/`wrapCommand`).
 
 **Hinweistexte** nennen den Ordner. Ein abgelaufenes Token im zweiten Konto sagt
 „»CLAUDE_CONFIG_DIR=~/.claude-2 claude« im Terminal starten“, denn ein schlichtes `claude`
