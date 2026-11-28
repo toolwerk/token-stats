@@ -31,6 +31,9 @@ public sealed class AppSettings
         public double RefreshInterval { get; set; } = MinimumInterval;
         public bool ShowMoney { get; set; } = true;
         public int BillingDay { get; set; } = 1;
+        public Dictionary<string, string> AccountLabels { get; set; } = [];
+        public List<string> HiddenAccounts { get; set; } = [];
+        public Dictionary<string, List<string>> AccountFolders { get; set; } = [];
     }
 
     static readonly JsonSerializerOptions JsonOptions = new()
@@ -71,6 +74,42 @@ public sealed class AppSettings
 
     /// <summary>Stichtag des Abos für den Zeitraum „Abrechnungsmonat“.</summary>
     public int BillingDay { get => stored.BillingDay; set => Set(() => stored.BillingDay = Math.Clamp(value, 1, 31)); }
+
+    // Konten (SPEC §6 „Mehrere Konten je Anbieter“)
+
+    /// <summary>Eigene Bezeichnungen der Konten, Konto-ID → Text.</summary>
+    public IReadOnlyDictionary<string, string> AccountLabels => stored.AccountLabels;
+
+    public void SetAccountLabel(string id, string? label) => Set(() =>
+    {
+        if (string.IsNullOrWhiteSpace(label)) stored.AccountLabels.Remove(id);
+        else stored.AccountLabels[id] = label.Trim();
+    });
+
+    /// <summary>Ausgeblendete Konten: nicht abgefragt, nicht angezeigt, nicht im Verbrauch.</summary>
+    public bool IsHidden(string id) => stored.HiddenAccounts.Contains(id);
+
+    public void SetHidden(string id, bool hidden) => Set(() =>
+    {
+        stored.HiddenAccounts.Remove(id);
+        if (hidden) stored.HiddenAccounts.Add(id);
+    });
+
+    /// <summary>Von Hand hinzugefügte Konfigurationsordner, Anbieter-ID → Pfade.</summary>
+    public IReadOnlyDictionary<string, List<string>> AccountFolders => stored.AccountFolders;
+
+    public void AddAccountFolder(string kind, string path) => Set(() =>
+    {
+        var folders = stored.AccountFolders.TryGetValue(kind, out var list) ? list : stored.AccountFolders[kind] = [];
+        if (!folders.Contains(path, StringComparer.OrdinalIgnoreCase)) folders.Add(path);
+    });
+
+    public void RemoveAccountFolder(string kind, string path) => Set(() =>
+    {
+        if (!stored.AccountFolders.TryGetValue(kind, out var folders)) return;
+        folders.RemoveAll(folder => string.Equals(Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar), path, StringComparison.OrdinalIgnoreCase));
+        if (folders.Count == 0) stored.AccountFolders.Remove(kind);
+    });
 
     void Set(Action change)
     {

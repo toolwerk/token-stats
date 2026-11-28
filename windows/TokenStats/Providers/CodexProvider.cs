@@ -10,14 +10,49 @@ namespace TokenStats.Providers;
 /// </summary>
 public sealed class CodexProvider : IUsageProvider
 {
-    public string Id => "codex";
+    public string Kind => "codex";
     public string DisplayName => "Codex";
+    public AccountSource Source { get; }
 
     static readonly Uri UsageUrl = new("https://chatgpt.com/backend-api/wham/usage");
     const string Hint = "Codex einmal starten oder »codex login«.";
 
-    static string AuthFile =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "auth.json");
+    /// <summary><paramref name="home"/> = <c>CODEX_HOME</c> eines weiteren Kontos; <c>null</c> = Standardkonto.</summary>
+    public CodexProvider(string? home = null, AccountOrigin origin = AccountOrigin.Detected)
+    {
+        var folder = home is null ? null : Path.GetFullPath(home).TrimEnd(Path.DirectorySeparatorChar);
+        var directory = folder ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex");
+        (string? Id, string? Email)? account = null;
+        try { account = ParseAccount(File.ReadAllBytes(Path.Combine(directory, "auth.json"))); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        Source = new AccountSource
+        {
+            Folder = folder, Origin = folder is null ? AccountOrigin.Standard : origin,
+            Identity = account?.Id, Email = account?.Email,
+        };
+    }
+
+    public string Id => Source.Folder is { } folder ? $"{Kind}@{FolderHash.Of(folder)}" : Kind;
+
+    /// <summary>Ordner dieses Kontos; Logs liegen in <c>sessions</c> und <c>archived_sessions</c>.</summary>
+    public string HomeDirectory =>
+        Source.Folder ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex");
+
+    string AuthFile => Path.Combine(HomeDirectory, "auth.json");
+
+    string LoginHint => Source.Folder is { } folder
+        ? $"»$env:CODEX_HOME=\"{folder}\"; codex« einmal starten oder »codex login«."
+        : Hint;
+
+    /// <summary>Kontokennung und E-Mail aus <c>auth.json</c> – für Bezeichnung und doppelte Anmeldungen.</summary>
+    public static (string? Id, string? Email)? ParseAccount(byte[] data)
+    {
+        var tokens = JsonRead.ParseObject(data).Obj("tokens");
+        if (tokens is null) return null;
+        var id = tokens.Str("account_id") is { Length: > 0 } value ? value : null;
+        var email = tokens.Str("id_token") is { } idToken ? Jwt.Payload(idToken).Str("email") : null;
+        return (id, email);
+    }
 
     public bool IsInstalled() => File.Exists(AuthFile);
 
@@ -28,14 +63,14 @@ public sealed class CodexProvider : IUsageProvider
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { root = null; }
         var tokens = root.Obj("tokens");
         var accessToken = tokens.Str("access_token");
-        if (string.IsNullOrEmpty(accessToken)) throw ProviderException.NotLoggedIn(Hint);
+        if (string.IsNullOrEmpty(accessToken)) throw ProviderException.NotLoggedIn(LoginHint);
 
         if (Jwt.Payload(accessToken).Num("exp") is { } exp && DateTimeOffset.FromUnixTimeSeconds((long)exp) < DateTimeOffset.UtcNow)
-            throw ProviderException.TokenExpired(Hint);
+            throw ProviderException.TokenExpired(LoginHint);
 
         var headers = new Dictionary<string, string> { ["Authorization"] = $"Bearer {accessToken}" };
         if (tokens.Str("account_id") is { Length: > 0 } accountId) headers["chatgpt-account-id"] = accountId;
-        var snapshot = Parse(await Http.GetJsonAsync(UsageUrl, headers, Hint), DateTimeOffset.UtcNow);
+        var snapshot = Parse(await Http.GetJsonAsync(UsageUrl, headers, LoginHint), DateTimeOffset.UtcNow);
 
         var claims = tokens.Str("id_token") is { } idToken ? Jwt.Payload(idToken) : null;
         var plan = claims.Obj("https://api.openai.com/auth").Str("chatgpt_plan_type") ?? snapshot.Account?.Plan;

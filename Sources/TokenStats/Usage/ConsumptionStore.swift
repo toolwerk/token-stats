@@ -20,6 +20,9 @@ final class ConsumptionStore {
     /// Lokale Dateien, kein Netz – ein kurzer Takt ist unkritisch.
     static let scanInterval: TimeInterval = 60
 
+    /// Log-Ordner aller sichtbaren Konten; Standard: nur `~/.claude` und `~/.codex`.
+    var roots: @MainActor () -> UsageLedger.Roots = { .standard }
+
     init(settings: AppSettings) {
         self.settings = settings
         do {
@@ -59,8 +62,9 @@ final class ConsumptionStore {
         isScanning = true
         let billingDay = settings.billingDay
         let prices = prices
+        let logRoots = self.roots()
         Task {
-            await ledger.scan()
+            await ledger.scan(logRoots)
             var result: [String: [UsagePeriod: UsageSummary]] = [:]
             for provider in Self.providers {
                 for period in UsagePeriod.allCases {

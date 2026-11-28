@@ -7,7 +7,6 @@ actor UsageLedger {
     typealias Row = UsageRow
 
     private let db: SQLiteDB
-    private let home = FileManager.default.homeDirectoryForCurrentUser
     private let calendar = Calendar.current
 
     /// Schemaversion; eine Änderung verwirft das Aggregat und liest neu ein.
@@ -40,29 +39,52 @@ actor UsageLedger {
 
     // MARK: Einlesen
 
+    /// Ordner, deren Logs eingelesen werden – je Anbieter die Ordner aller Konten
+    /// (SPEC §6 „Mehrere Konten“): Claude `<ordner>/projects`, Codex `<ordner>`.
+    struct Roots: Equatable, Sendable {
+        var claude: [URL]
+        var codex: [URL]
+
+        static var standard: Roots {
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            return Roots(claude: [home.appending(path: ".claude/projects")], codex: [home.appending(path: ".codex")])
+        }
+    }
+
     /// Liest alle neuen Zeilen seit dem letzten Lauf. Liefert true, wenn sich etwas geändert hat.
     @discardableResult
-    func scan() -> Bool {
+    func scan(_ roots: Roots = .standard) -> Bool {
         var changed = false
-        for (key, url) in claudeFiles() {
+        for (key, url) in claudeFiles(roots.claude) {
             if ingest(key: key, url: url, provider: "claude") { changed = true }
         }
-        for (key, url) in codexFiles() {
+        for (key, url) in codexFiles(roots.codex) {
             if ingest(key: key, url: url, provider: "codex") { changed = true }
         }
         return changed
     }
 
-    private func claudeFiles() -> [(String, URL)] {
-        let root = home.appending(path: ".claude/projects")
-        return jsonlFiles(under: root).map { ("claude:" + $0.path.dropFirst(root.path.count), $0) }
+    /// Ordner mit demselben echten Pfad (Symlink zwischen zwei Konten) nur einmal.
+    static func unique(_ roots: [URL]) -> [URL] {
+        var seen: Set<String> = []
+        return roots.map { $0.resolvingSymlinksInPath().standardizedFileURL }.filter { seen.insert($0.path).inserted }
+    }
+
+    /// Schlüssel relativ zum Ordner: Dieselbe Datei unter zwei Konten zählt nur einmal,
+    /// und der Lesestand des Standardkontos bleibt gültig.
+    private func claudeFiles(_ roots: [URL]) -> [(String, URL)] {
+        Self.unique(roots).flatMap { root in
+            jsonlFiles(under: root).map { ("claude:" + $0.path.dropFirst(root.path.count), $0) }
+        }
     }
 
     /// Schlüssel ist der Dateiname: Codex verschiebt fertige Sessions nach
     /// `archived_sessions`, der Lesestand soll mitwandern.
-    private func codexFiles() -> [(String, URL)] {
-        ["sessions", "archived_sessions"].flatMap { folder in
-            jsonlFiles(under: home.appending(path: ".codex/\(folder)")).map { ("codex:" + $0.lastPathComponent, $0) }
+    private func codexFiles(_ roots: [URL]) -> [(String, URL)] {
+        Self.unique(roots).flatMap { root in
+            ["sessions", "archived_sessions"].flatMap { folder in
+                jsonlFiles(under: root.appending(path: folder)).map { ("codex:" + $0.lastPathComponent, $0) }
+            }
         }
     }
 

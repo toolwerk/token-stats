@@ -101,6 +101,9 @@ public sealed class ConsumptionStore
     readonly AppSettings settings;
     DispatcherTimer? timer;
 
+    /// <summary>Log-Ordner aller sichtbaren Konten; <c>null</c> = nur <c>.claude</c> und <c>.codex</c> im Profil.</summary>
+    public Func<UsageLedger.Roots>? Roots { get; set; }
+
     public ConsumptionStore(AppSettings settings, string? ledgerPath)
     {
         this.settings = settings;
@@ -140,9 +143,10 @@ public sealed class ConsumptionStore
         if (ledger is null || IsScanning) return;
         IsScanning = true;
         var billingDay = settings.BillingDay;
+        var roots = Roots?.Invoke();
         Task.Run(() =>
         {
-            ledger.Scan();
+            ledger.Scan(roots);
             var today = DateOnly.FromDateTime(DateTime.Now);
             var result = new Dictionary<string, Dictionary<UsagePeriod, UsageSummary>>();
             foreach (var provider in ProviderIds)

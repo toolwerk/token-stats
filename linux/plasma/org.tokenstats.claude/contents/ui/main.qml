@@ -9,13 +9,22 @@ PlasmoidItem {
 
     property var info: null
     property var updated: null
-    readonly property real worst: info && info.limits.length
-        ? Math.max.apply(null, info.limits.map(function (l) { return l.pct })) : 0
+    // knappstes Limit über alle Konten
+    readonly property var worstAccount: {
+        var best = null, pct = -1
+        var list = info && info.accounts ? info.accounts : []
+        for (var i = 0; i < list.length; i++)
+            for (var j = 0; j < list[i].limits.length; j++)
+                if (list[i].limits[j].pct > pct) { pct = list[i].limits[j].pct; best = list[i] }
+        return best
+    }
+    readonly property real worst: worstAccount
+        ? Math.max.apply(null, worstAccount.limits.map(function (l) { return l.pct })) : 0
     readonly property string command: "python3 " + Qt.resolvedUrl("../code/backend.py").toString().replace("file://", "")
 
     Plasmoid.status: PlasmaCore.Types.ActiveStatus
     toolTipMainText: "Token Stats"
-    toolTipSubText: info ? "Claude " + Math.round(worst) + " %" : "lädt …"
+    toolTipSubText: info ? (worstAccount ? worstAccount.title : "Claude") + " " + Math.round(worst) + " %" : "lädt …"
 
     compactRepresentation: TrayIcon {
         pct: root.worst

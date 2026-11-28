@@ -29,37 +29,105 @@ public sealed class UsageStore
     /// <summary>Abstand zwischen zwei manuellen Aktualisierungen.</summary>
     public static readonly TimeSpan ManualFloor = TimeSpan.FromSeconds(60);
 
-    public IReadOnlyList<IUsageProvider> Providers { get; }
+    /// <summary>Alle erkannten Konten, auch ausgeblendete und nicht installierte.</summary>
+    public IReadOnlyList<IUsageProvider> Providers { get; private set; }
     public Dictionary<string, ProviderState> States { get; private set; }
     public HashSet<string> Loading { get; } = [];
 
     public event Action? Changed;
 
+    /// <summary>Konten höchstens so oft neu suchen (Ordnerliste + Kontodateien).</summary>
+    static readonly TimeSpan DiscoveryInterval = TimeSpan.FromSeconds(60);
+
     readonly AppSettings settings;
     readonly string? cachePath;
+    readonly Func<IReadOnlyList<IUsageProvider>>? discover;
+    DateTimeOffset lastDiscovery = DateTimeOffset.MinValue;
+    bool isDemo;
     DispatcherTimer? timer;
 
-    public UsageStore(IReadOnlyList<IUsageProvider> providers, AppSettings settings, string? cachePath)
+    /// <summary><paramref name="discover"/> findet die Konten neu (SPEC §6 „Mehrere Konten“); ohne bleibt <see cref="Providers"/> fest.</summary>
+    public UsageStore(IReadOnlyList<IUsageProvider> providers, AppSettings settings, string? cachePath,
+                      Func<IReadOnlyList<IUsageProvider>>? discover = null)
     {
         Providers = providers;
         this.settings = settings;
         this.cachePath = cachePath;
+        this.discover = discover;
         States = LoadCache(cachePath);
+    }
+
+    /// <summary>Sucht die Konten neu; meldet nur, wenn sich wirklich etwas geändert hat.</summary>
+    public void ReloadAccounts()
+    {
+        if (discover is null || isDemo) return;
+        lastDiscovery = DateTimeOffset.UtcNow;
+        var found = discover();
+        if (found.Select(p => p.Id).SequenceEqual(Providers.Select(p => p.Id))
+            && found.Select(p => p.Source).SequenceEqual(Providers.Select(p => p.Source))) return;
+        Providers = found;
+        Changed?.Invoke();
     }
 
     public ProviderState State(string id) => States.TryGetValue(id, out var state) ? state : new ProviderState();
 
-    public IEnumerable<IUsageProvider> InstalledProviders => Providers.Where(p => p.IsInstalled());
+    /// <summary>Sichtbare Konten: Quelle vorhanden und nicht ausgeblendet.</summary>
+    public IEnumerable<IUsageProvider> InstalledProviders => Providers.Where(p => p.IsInstalled() && !settings.IsHidden(p.Id));
 
-    /// <summary>Alphabetisch nach Namen, damit die Tabs nicht springen (SPEC §3.2).</summary>
-    public List<IUsageProvider> SortedProviders =>
-        InstalledProviders.OrderBy(p => p.DisplayName, StringComparer.Create(Format.Culture, ignoreCase: true)).ToList();
+    /// <summary>
+    /// Alphabetisch nach Anbieter, darin Standardkonto zuerst, dann nach Bezeichnung – damit die
+    /// Tabs nicht springen (SPEC §3.2).
+    /// </summary>
+    public List<IUsageProvider> SortedProviders
+    {
+        get
+        {
+            var comparer = StringComparer.Create(Format.Culture, ignoreCase: true);
+            return InstalledProviders
+                .OrderBy(p => p.DisplayName, comparer)
+                .ThenBy(p => p.IsDefaultAccount ? 0 : 1)
+                .ThenBy(p => Label(p) ?? "", comparer)
+                .ToList();
+        }
+    }
+
+    /// <summary>Sichtbare Konten desselben Anbieters.</summary>
+    public List<IUsageProvider> AccountsOfKind(string kind) => SortedProviders.Where(p => p.Kind == kind).ToList();
+
+    /// <summary>Bezeichnung des Kontos: eigene, sonst automatisch (E-Mail, Name, Ordner).</summary>
+    public string? Label(IUsageProvider provider)
+    {
+        if (settings.AccountLabels.TryGetValue(provider.Id, out var own) && !string.IsNullOrWhiteSpace(own)) return own;
+        if (provider.Source.AutomaticLabel is { } label) return label;
+        if (State(provider.Id).Snapshot?.Account?.Name is { } name)
+            return new AccountSource { Email = name.Contains('@') ? name : null, Name = name }.AutomaticLabel;
+        return provider.IsDefaultAccount ? "Standard" : null;
+    }
+
+    /// <summary>Bezeichnung nur, wenn der Anbieter mehrere sichtbare Konten hat.</summary>
+    public string? AccountLabel(IUsageProvider provider) => AccountsOfKind(provider.Kind).Count > 1 ? Label(provider) : null;
+
+    /// <summary>„Claude“ bei einem Konto, „Claude · frank“ bei mehreren.</summary>
+    public string Title(IUsageProvider provider) =>
+        AccountLabel(provider) is { } label ? $"{provider.DisplayName} · {label}" : provider.DisplayName;
+
+    /// <summary>Log-Ordner der sichtbaren Konten, für die Verbrauchsseite.</summary>
+    public Usage.UsageLedger.Roots LogRoots
+    {
+        get
+        {
+            var visible = InstalledProviders.ToList();
+            return new Usage.UsageLedger.Roots(
+                visible.OfType<ClaudeProvider>().Select(p => p.ProjectsDirectory).ToList(),
+                visible.OfType<CodexProvider>().Select(p => p.HomeDirectory).ToList());
+        }
+    }
 
     /// <summary>Wert für Tray-Symbol und Tooltip.</summary>
     public Pick? Displayed => (settings.FixedWindow is { } key ? PickFor(key) : null) ?? Tightest;
 
     public Pick? Tightest => InstalledProviders
-        .Select(p => State(p.Id).Snapshot?.TightestWindow is { } window ? new Pick(p.Id, p.DisplayName, window) : null)
+        .Select(p => State(p.Id).Snapshot?.TightestWindow is { } window ? new Pick(p.Id, Title(p), window) : null)
         .OfType<Pick>()
         .MaxBy(pick => pick.Window.Percent);
 
@@ -67,17 +135,18 @@ public sealed class UsageStore
     {
         var parts = key.Split('/', 2);
         if (parts.Length != 2) return null;
-        var provider = Providers.FirstOrDefault(p => p.Id == parts[0]);
+        var provider = InstalledProviders.FirstOrDefault(p => p.Id == parts[0]);
         var window = provider is null ? null : State(provider.Id).Snapshot?.Windows.FirstOrDefault(w => w.Id == parts[1]);
-        return window is null ? null : new Pick(provider!.Id, provider.DisplayName, window);
+        return window is null ? null : new Pick(provider!.Id, Title(provider), window);
     }
 
-    public DateTimeOffset? LastUpdate => States.Values.Select(s => s.Snapshot?.FetchedAt).Max();
+    public DateTimeOffset? LastUpdate => InstalledProviders.Select(p => State(p.Id).Snapshot?.FetchedAt).Max();
 
     // Abruf
 
     public void Start()
     {
+        ReloadAccounts();
         Refresh(manual: false);
         // Der Timer prüft nur, ob etwas fällig ist; der eigentliche Takt ist RefreshInterval.
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
@@ -88,6 +157,7 @@ public sealed class UsageStore
     public void Refresh(bool manual)
     {
         var now = DateTimeOffset.UtcNow;
+        if (manual || now - lastDiscovery >= DiscoveryInterval) ReloadAccounts();
         RollOverResets(now);
         foreach (var provider in InstalledProviders.Where(p => !Loading.Contains(p.Id)))
         {
@@ -158,6 +228,9 @@ public sealed class UsageStore
     /// <summary>Nur für Screenshots: fester Stand, ohne Abruf und ohne den Cache zu überschreiben.</summary>
     public void ShowDemo(Dictionary<string, ProviderSnapshot> snapshots)
     {
+        // Nie echte Konten in Screenshots: nur die Standardkonten, ohne Erkennung.
+        isDemo = true;
+        Providers = [new ClaudeProvider(), new CodexProvider(), new AntigravityProvider(), new OllamaProvider()];
         States = snapshots.ToDictionary(pair => pair.Key, pair => new ProviderState { Snapshot = pair.Value });
         Changed?.Invoke();
     }

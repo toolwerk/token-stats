@@ -60,6 +60,19 @@ final class AppSettings {
         return id
     }
 
+    /// Eigene Bezeichnungen der Konten, Konto-ID → Text (SPEC §6 „Mehrere Konten“).
+    var accountLabels: [String: String] {
+        didSet { defaults.set(accountLabels, forKey: "accountLabels") }
+    }
+    /// Ausgeblendete Konten: nicht abgefragt, nicht angezeigt, nicht im Verbrauch.
+    var hiddenAccounts: Set<String> {
+        didSet { defaults.set(hiddenAccounts.sorted(), forKey: "hiddenAccounts") }
+    }
+    /// Von Hand hinzugefügte Konfigurationsordner, Anbieter-ID → Pfade.
+    var accountFolders: [String: [String]] {
+        didSet { defaults.set(accountFolders, forKey: "accountFolders") }
+    }
+
     static let minimumInterval: TimeInterval = 300
 
     init() {
@@ -69,6 +82,9 @@ final class AppSettings {
         refreshInterval = max(defaults.double(forKey: "refreshInterval"), Self.minimumInterval)
         showMoney = defaults.object(forKey: "showMoney") as? Bool ?? true
         billingDay = min(max(defaults.integer(forKey: "billingDay"), 1), 31)
+        accountLabels = defaults.dictionary(forKey: "accountLabels") as? [String: String] ?? [:]
+        hiddenAccounts = Set(defaults.stringArray(forKey: "hiddenAccounts") ?? [])
+        accountFolders = defaults.dictionary(forKey: "accountFolders") as? [String: [String]] ?? [:]
         cloudSync = defaults.bool(forKey: "cloudSync")
     }
 

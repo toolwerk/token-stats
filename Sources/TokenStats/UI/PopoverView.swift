@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import TokenStatsCore
 
@@ -26,15 +27,19 @@ struct PopoverView: View {
     }
 
     static let width: CGFloat = 372
-    static let maxVisibleTabs = 4
     /// Seitenrand aller Blöcke im Popover.
     static let inset: CGFloat = 16
 
     var body: some View {
-        let providers = store.sortedProviders
+        // „Verbrauch“ gilt je Anbieter: dort ein Tab je Anbieter statt je Konto (SPEC §6).
+        let providers = page == .usage ? Self.firstPerKind(store.sortedProviders) : store.sortedProviders
         // Beim Öffnen ist der knappste Anbieter aktiv, die Tab-Reihenfolge bleibt fest.
         let activeID = selectedID ?? store.tightest?.providerID
-        let selected = providers.first { $0.id == activeID } ?? providers.first
+        let active = store.sortedProviders.first { $0.id == activeID }
+            ?? store.sortedProviders.first { $0.kind == activeID }
+        let selected = page == .usage
+            ? providers.first { $0.kind == active?.kind } ?? providers.first
+            : active ?? providers.first
 
         VStack(spacing: 0) {
             header
@@ -46,11 +51,14 @@ struct PopoverView: View {
                 if let selected {
                     ProviderPage(
                         provider: selected,
+                        title: page == .usage ? selected.displayName : store.title(for: selected),
                         page: page,
                         state: store.states[selected.id] ?? .init(),
                         isLoading: store.loading.contains(selected.id),
                         consumption: consumption,
-                        showMoney: settings.showMoney
+                        showMoney: settings.showMoney,
+                        subscription: subscription(kind: selected.kind),
+                        accountCount: store.accounts(ofKind: selected.kind).count
                     )
                 }
             }
@@ -62,6 +70,19 @@ struct PopoverView: View {
             // ⌘, öffnet die Einstellungen, solange das Popover offen ist.
             Button("", action: openSettings).keyboardShortcut(",", modifiers: .command).hidden()
         }
+    }
+
+    static func firstPerKind(_ providers: [any UsageProvider]) -> [any UsageProvider] {
+        var seen: Set<String> = []
+        return providers.filter { seen.insert($0.kind).inserted }
+    }
+
+    /// Abo-Preis aller Konten eines Anbieters zusammen – zwei Max-Abos sind 400 $, nicht 200 $.
+    private func subscription(kind: String) -> Int? {
+        let prices = store.accounts(ofKind: kind).compactMap {
+            SubscriptionPrice.dollars(provider: kind, plan: store.states[$0.id]?.snapshot?.account?.plan)
+        }
+        return prices.isEmpty ? nil : prices.reduce(0, +)
     }
 
     // MARK: Kopf
@@ -81,20 +102,25 @@ struct PopoverView: View {
     // MARK: Tabs
 
     private func tabBar(_ providers: [any UsageProvider], selected: String?) -> some View {
-        let visible = providers.prefix(Self.maxVisibleTabs)
-        let overflow = providers.dropFirst(Self.maxVisibleTabs)
+        let titles = providers.map { (provider: $0, label: page == .usage ? nil : store.accountLabel(for: $0)) }
+        let count = Self.visibleTabCount(titles.map { ($0.provider.displayName, $0.label) })
+        let visible = titles.prefix(count)
+        let overflow = titles.dropFirst(count)
         return HStack(spacing: 2) {
-            ForEach(visible, id: \.id) { provider in
+            ForEach(visible, id: \.provider.id) { item in
                 TabButton(
-                    title: provider.displayName,
-                    severity: store.states[provider.id]?.snapshot?.tightestWindow?.severity,
-                    isActive: provider.id == selected
-                ) { selectedID = provider.id }
+                    title: item.provider.displayName,
+                    label: item.label,
+                    severity: store.states[item.provider.id]?.snapshot?.tightestWindow?.severity,
+                    isActive: item.provider.id == selected
+                ) { selectedID = item.provider.id }
             }
             if !overflow.isEmpty {
                 Menu("+\(overflow.count)") {
-                    ForEach(overflow, id: \.id) { provider in
-                        Button(provider.displayName) { selectedID = provider.id }
+                    ForEach(overflow, id: \.provider.id) { item in
+                        Button(item.label.map { "\(item.provider.displayName) · \($0)" } ?? item.provider.displayName) {
+                            selectedID = item.provider.id
+                        }
                     }
                 }
                 .menuStyle(.borderlessButton)
@@ -104,6 +130,31 @@ struct PopoverView: View {
             Spacer()
         }
         .padding(.horizontal, Self.inset - 10)
+    }
+
+    /// Wie viele Tabs in die Breite passen – gemessen statt fest, weil Konten-Tabs länger sind.
+    static func visibleTabCount(_ titles: [(String, String?)]) -> Int {
+        let available = width - 2 * (inset - 10)
+        let overflowWidth: CGFloat = 40
+        func tabWidth(_ title: String, _ label: String?) -> CGFloat {
+            let bold = NSFont.systemFont(ofSize: 12, weight: .semibold)
+            var text = (title as NSString).size(withAttributes: [.font: bold]).width
+            if let label {
+                let shown = String(label.prefix(TabButton.maxLabelLength))
+                text += 4 + (shown as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11)]).width
+            }
+            return ceil(text) + 5 + 5 + 20 + 2
+        }
+        let widths = titles.map(tabWidth)
+        if widths.reduce(0, +) <= available { return titles.count }
+        var used: CGFloat = 0
+        var count = 0
+        for width in widths {
+            guard used + width + overflowWidth <= available else { break }
+            used += width
+            count += 1
+        }
+        return max(count, 1)
     }
 
     private var emptyState: some View {
@@ -167,7 +218,11 @@ struct PopoverView: View {
 }
 
 private struct TabButton: View {
+    static let maxLabelLength = 12
+
     let title: String
+    /// Kontobezeichnung, nur bei mehreren Konten eines Anbieters.
+    var label: String?
     let severity: Severity?
     let isActive: Bool
     let action: () -> Void
@@ -179,6 +234,12 @@ private struct TabButton: View {
                     .fill(severity?.color ?? Color.secondary.opacity(0.4))
                     .frame(width: 5, height: 5)
                 Text(title)
+                if let label {
+                    Text(label.count > Self.maxLabelLength ? String(label.prefix(Self.maxLabelLength - 1)) + "…" : label)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, -1)
+                }
             }
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(isActive ? .primary : .secondary)
@@ -255,17 +316,24 @@ private struct PageSwitch: View {
 
 private struct ProviderPage: View {
     let provider: any UsageProvider
+    /// „Claude · frank“ auf „Limits“, nur „Claude“ auf „Verbrauch“.
+    let title: String
     let page: Page
     let state: UsageStore.ProviderState
     let isLoading: Bool
     let consumption: ConsumptionStore
     let showMoney: Bool
+    /// Abo-Preis aller Konten des Anbieters.
+    let subscription: Int?
+    let accountCount: Int
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 8) {
-                Text(provider.displayName).font(.system(size: 13, weight: .bold))
-                if let plan = state.snapshot?.account?.plan {
+                Text(title).font(.system(size: 13, weight: .bold)).lineLimit(1)
+                if page == .usage, accountCount > 1 {
+                    Text("\(accountCount) Konten").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                } else if let plan = state.snapshot?.account?.plan {
                     Text(plan).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -281,10 +349,11 @@ private struct ProviderPage: View {
 
             if page == .usage {
                 UsageView(
-                    providerID: provider.id,
+                    providerID: provider.kind,
                     consumption: consumption,
                     showMoney: showMoney,
-                    subscription: SubscriptionPrice.dollars(provider: provider.id, plan: state.snapshot?.account?.plan)
+                    subscription: subscription,
+                    accountCount: accountCount
                 )
             } else {
                 limits

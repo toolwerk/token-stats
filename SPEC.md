@@ -57,7 +57,7 @@ Roboter-Icon · „Token Stats“ · rechts der Seitenumschalter `Limits · Verb
 Das knappste Limit steht hier nicht mehr (Entscheidung 28.09.2026): Es ist schon in der
 Menüleiste sichtbar und in den Tab-Punkten; doppelt wirkte der Kopf überladen.
 
-### 3.2 Tab-Leiste — ein Tab je Client
+### 3.2 Tab-Leiste — ein Tab je Konto
 `Antigravity · Claude · Codex · Copilot · +2`
 
 - Jeder Tab trägt einen 5-pt-Statuspunkt in der Zustandsfarbe. Damit ist der kritische
@@ -67,6 +67,8 @@ Menüleiste sichtbar und in den Tab-Punkten; doppelt wirkte der Kopf überladen.
   willkürlich. Dringlichkeit zeigen Statuspunkt und aktiver Tab.
 - Passen nicht alle Tabs in die Breite, sammelt `+n` den Rest in einem Menü.
 - Tabs statt langer Liste, weil die Popover-Höhe sonst mit jedem Anbieter wächst.
+- Mehrere Konten eines Anbieters: ein Tab je Konto, „Claude frank · Claude claude2“;
+  auf der Seite „Verbrauch“ ein Tab je Anbieter (§6 „Mehrere Konten je Anbieter“).
 
 ### 3.3 Seitenumschalter
 `Limits · Verbrauch` als schlanker Kapsel-Umschalter rechts in der Kopfzeile, gilt für
@@ -152,7 +154,8 @@ Eigenes Fenster, Abschnitt **Anzeige**:
 - Checkboxen: Zustandsfarbe im Icon verwenden · Eigenes Symbol pro Client ·
   API-Vergleichswert in Geld anzeigen · Bei Anmeldung starten
 
-Weitere Abschnitte: **Anbieter** (je Client an/aus, Reihenfolge), **Mitteilungen**
+Weitere Abschnitte: **Konten** (erkannte Konten je Anbieter, Bezeichnung, anzeigen
+an/aus, Ordner hinzufügen; §6 „Mehrere Konten je Anbieter“), **Anbieter** (je Client an/aus, Reihenfolge), **Mitteilungen**
 (Schwellen), **Aktualisierung** (Intervall, mindestens 300 s), **Updates** (automatisch
 suchen an/aus, „Jetzt suchen“, installierte Version, letzte Suche).
 
@@ -307,6 +310,121 @@ Token, das nur die CLI auf diesem Mac erneuert. Lebensdauer: Claude 8 h, Codex 1
 Antigravity 1 h, Ollama unbegrenzt (Schlüssel statt Token, Ollama muss nicht laufen).
 Der Verbrauch kommt aus den lokalen Logs und enthält nur diesen Mac – die Fußnote der
 Seite sagt das ausdrücklich. Übersicht für Nutzer: README „Wie aktuell sind die Zahlen?“.
+
+### Mehrere Konten je Anbieter (Konzept und Umsetzung 27.11.2026)
+
+Bisher galt: ein Anbieter = ein Konto. Wer zwei Claude-Abos hat (z. B. privat und
+Firma, oder zwei Max-Konten), sah nur das Standardkonto. Neu: **Ein Anbieter hat 1…n
+Konten. Limits gelten je Konto, Verbrauch je Anbieter.**
+
+**Begriffe.** *Anbieter* (`kind`: `claude`, `codex`, …) ist der Dienst, *Konto* ist eine
+Anmeldung mit eigenem Token und eigenem Kontingent. Jede Instanz eines `UsageProvider`
+steht für genau ein Konto. Bei Anbietern mit nur einer Quelle (Antigravity, Ollama)
+bleibt es bei einer Instanz.
+
+**Wie mehrere Konten lokal entstehen** (verifiziert 27.11.2026, Claude Code 2.1.x):
+
+- **Claude Code:** `CLAUDE_CONFIG_DIR=<ordner> claude` startet mit eigener Konfiguration
+  und eigener Anmeldung. Zugangsdaten liegen dann im Schlüsselbund unter dem Dienst
+  `Claude Code-credentials-<erste 8 Hex-Zeichen von SHA-256(Ordnerpfad)>` (ohne
+  Variable: `Claude Code-credentials`), als Fallback in `<ordner>/.credentials.json`.
+  Die Kontodaten (`oauthAccount`: E-Mail, Anzeigename, `accountUuid`) stehen in
+  `<ordner>/.claude.json` statt in `~/.claude.json`, die Logs in `<ordner>/projects`.
+  Dieses `projects` ist oft per Symlink mit `~/.claude/projects` geteilt.
+- **Codex:** `CODEX_HOME=<ordner> codex` → `<ordner>/auth.json`, Logs in
+  `<ordner>/sessions` und `archived_sessions`.
+- **Antigravity, Ollama:** Je Mac gibt es nur eine Quelle (ein Schlüsselbund-Eintrag bzw.
+  `~/.ollama/id_ed25519`). Das Modell trägt mehr Konten, die Quelle liefert aber nur eins.
+
+**Erkennung** (`AccountDiscovery`). Sie liest nur Ordnerlisten und Kontodateien, keine
+Tokens:
+
+1. Das Standardkonto wie bisher (`~/.claude`, `~/.codex`, …).
+2. Automatisch: Ordner direkt im Home, deren Name mit `.claude-`/`.claude_` bzw.
+   `.codex-`/`.codex_` beginnt und die eine Kontodatei enthalten (`.claude.json` bzw.
+   `auth.json`). Das deckt die gängige Konvention `~/.claude-2` oder `~/.claude-work` ab.
+3. Von Hand: Einstellungen → Konten → „Ordner hinzufügen …“ für beliebige Orte.
+   Umgebungsvariablen helfen nicht, weil eine per Finder gestartete App die
+   Shell-Umgebung nicht sieht.
+4. **Doppelte Anmeldungen** (zwei Ordner, dasselbe Konto, also gleiche `accountUuid` bzw.
+   ChatGPT-`account_id`) erscheinen nur einmal. Es gilt der zuerst gefundene Ordner in
+   der Reihenfolge Standard, automatisch, von Hand. Sonst zählten beide Abfragen gegen
+   dasselbe Rate-Limit, und die Zahlen stünden doppelt da.
+5. Die Erkennung läuft beim Start, bei jeder Änderung in den Einstellungen und höchstens
+   einmal pro Minute im Abfragetakt. Ein neu angelegtes Konto erscheint also ohne
+   Neustart.
+
+**Kennungen.** Das Standardkonto behält die Anbieter-ID (`claude`). Cache (`state.json`),
+„Fester Wert“, Widget-Konfiguration und `tokenstats://`-Links bleiben damit gültig. Weitere
+Konten heißen `claude@<8 Hex von SHA-256(Ordnerpfad)>`. Die ID ist stabil und enthält
+weder Pfad noch E-Mail, darum taugt sie für `widgets.json`, iCloud und URLs. Bei Claude
+ist der Hash zugleich das Suffix des Schlüsselbund-Dienstes.
+
+**Bezeichnung.** Die eigene aus den Einstellungen, sonst der lokale Teil der E-Mail
+(`frank` aus `frank@…`), sonst der Anzeigename, sonst der Ordnername (`claude-2`). Hat ein
+Anbieter nur ein Konto, steht wie bisher nur „Claude“.
+
+**Anzeige.**
+
+- **Tabs:** ein Tab je Konto. Sortiert wird alphabetisch nach Anbieter, innerhalb eines
+  Anbieters das Standardkonto zuerst, dann nach Bezeichnung. Die Reihenfolge springt also
+  nicht (§3.2). Die Bezeichnung steht leiser hinter dem Anbieternamen („Claude frank“).
+  Wie viele Tabs sichtbar sind, richtet sich nach der gemessenen Textbreite statt nach
+  der festen Zahl 4; der Rest landet wie bisher in `+n`.
+- **Kopfzeile des Tabs:** „Claude · frank“, Plan, Zustands-Chip. Die Fußzeile nennt
+  weiter den Kontonamen.
+- **Menüleiste und Popover-Kopf:** knappstes Limit über alle Konten. Der Tooltip nennt
+  das Konto („Claude · frank · Woche: 82 %“). „Fester Wert“ ist je Konto wählbar.
+- **Abfragen:** Jedes Konto hat eigenes Token, eigenes Intervall (≥ 300 s), eigenes
+  Retry-After. Ein 429 bei Konto A pausiert Konto B nicht.
+
+**Verbrauch je Anbieter, nicht je Konto.** Die JSONL-Logs nennen kein Konto, und der
+`projects`-Ordner ist oft zwischen den Konfigurationsordnern geteilt (so auf diesem Mac).
+Eine Zuordnung wäre geraten. Darum:
+
+- Der Ledger liest die Logs aller Konten eines Anbieters. Ordner mit demselben echten
+  Pfad (Symlink) liest er nur einmal. Die Dateischlüssel sind relativ zum Ordner, und
+  Claude dedupliziert zusätzlich über `message.id:requestId`. Nichts zählt doppelt, und
+  das Schema bleibt gleich.
+- Auf der Seite „Verbrauch“ fallen die Tabs auf einen je Anbieter zusammen, sonst
+  stünden dieselben Zahlen zweimal da. Die Auswahl des Kontos bleibt für „Limits“
+  erhalten.
+- Der Abo-Vergleich summiert die bekannten Planpreise aller Konten des Anbieters
+  („Abo 400 $ / Monat“, Kopfzeile „2 Konten“). Mit zwei Max-Abos wäre der Vergleich gegen 200 $
+  sonst unehrlich. Die Fußnote sagt, dass alle Konten zusammengerechnet sind.
+- Ausgeblendete Konten fließen weder in Limits noch in Verbrauch ein. Liegen ihre Logs
+  in einem geteilten Ordner, zählen sie über das sichtbare Konto trotzdem mit.
+
+**Einstellungen, Abschnitt „Konten“.** Je Anbieter die erkannten Konten mit Bezeichnung
+(editierbar, Platzhalter = automatische Bezeichnung), Quelle (Ordner), E-Mail und Schalter
+„Anzeigen“. Ein ausgeblendetes Konto wird nicht abgefragt, verbraucht also kein
+Rate-Limit. Von Hand hinzugefügte Ordner lassen sich wieder entfernen. Darunter
+„Claude-Ordner hinzufügen …“ und „Codex-Ordner hinzufügen …“ (`NSOpenPanel` mit
+versteckten Dateien). Gespeichert wird in den UserDefaults: `accountLabels`
+(ID → Text), `hiddenAccounts` (IDs), `accountFolders` (Anbieter → Pfade).
+
+**Hinweistexte** nennen den Ordner. Ein abgelaufenes Token im zweiten Konto sagt
+„»CLAUDE_CONFIG_DIR=~/.claude-2 claude« im Terminal starten“, denn ein schlichtes `claude`
+erneuert nur das Standardkonto.
+
+**Widgets und iPhone.** `WidgetSnapshot.Provider` bekommt `kind` und `kindName`
+(optional, alte Dateien bleiben lesbar, Version bleibt 1). `name` ist der Tab-Titel mit
+Bezeichnung. Das Widget „Limits“ wählt statt eines festen Anbieter-Enums ein **Konto aus
+einer dynamischen Liste** (`AppEntity`, gelesen aus `widgets.json`). „Knappstes Limit“
+bleibt Standard. Eine gespeicherte Anbieter-ID wie `claude` zeigt das knappste Konto
+dieses Anbieters. Das Widget „Verbrauch“ bleibt je Anbieter und trägt dessen Namen. Die
+iOS-App zeigt die Konten über denselben Stand automatisch als eigene Abschnitte.
+
+**Windows und Linux.** Der Windows-Port setzt dasselbe Modell um: Erkennung von
+`%USERPROFILE%\.claude-*`/`.codex-*`, Ordner in den Einstellungen, gleiche Kennungen
+(Hash über den Windows-Pfad), Tabs, Abschnitt „Konten“, Verbrauch über alle Konten. Die
+Zugangsdaten liegen dort nur in `<ordner>\.credentials.json`. Die Linux-Widgets (nur
+Claude) erkennen `~/.claude-*`, den Ordner aus `CLAUDE_CONFIG_DIR` und Ordner aus
+`TOKENSTATS_CLAUDE_DIRS` (durch `:` getrennt), weil sie keine Einstellungsseite haben.
+
+**Abgrenzung:** Account-Wechsel (§7) ist ein anderes Thema. Er tauscht das aktive Login
+einer CLI. Mehrere Konten zeigen dagegen parallel angemeldete Logins an, ohne an den
+Zugangsdaten etwas zu ändern.
 
 ### Gestaffelte Preise (Stand 09.10.2026)
 

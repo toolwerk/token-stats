@@ -9,10 +9,28 @@ Python/GTK3, a single file.
 Wayland only; the notes on other desktops in the README one level up are expectations, not test results. Same data sources as the other versions:
 
 - Limits: `GET https://api.anthropic.com/api/oauth/usage` with the login from
-  `~/.claude/.credentials.json` (read only, the token is never refreshed or written).
+  `~/.claude/.credentials.json` (read only, the token is never refreshed or written); further
+  accounts below.
 - Usage: `~/.claude/projects/**/*.jsonl`, last message per id, cache writes split by 5 m / 1 h.
 - Prices: [`Sources/TokenStats/Resources/pricing.json`](../../Sources/TokenStats/Resources/pricing.json),
   so `Scripts/update-pricing.sh` updates all versions.
+
+## Several Claude accounts
+
+Every `CLAUDE_CONFIG_DIR` is an account of its own (SPEC §6 "Mehrere Konten je Anbieter"):
+
+- Found automatically: `~/.claude` (default account) plus every `~/.claude-*` or `~/.claude_*`
+  folder that contains a `.claude.json`, and the folder in `CLAUDE_CONFIG_DIR` if it is set.
+  Further folders: `TOKENSTATS_CLAUDE_DIRS=/path/one:/path/two`. The same folder (also via a
+  symlink) and the same login (`accountUuid`) count once.
+- Limits per account, from `<folder>/.credentials.json`, with their own 300 s interval and
+  `Retry-After`. One tab per account ("Claude · frank", label = local part of the email, else
+  the display name, else the folder name); with a single account nothing changes. Hints name the
+  folder, e.g. `CLAUDE_CONFIG_DIR=~/.claude-2 claude` starten.
+- Usage stays per provider: the logs name no account and `projects` is often shared by symlink,
+  so the "Verbrauch" page adds up the `projects` folders of all accounts (each real path once,
+  messages deduplicated by id).
+- An expired token (`expiresAt` in the past) is reported without a request.
 
 ## Install and run
 

@@ -14,6 +14,10 @@ ColumnLayout {
     property string page: "limits"
     property int rangeDays: 7
     property int now: 0   // bumped by a timer so "resets in" and pace texts stay current
+    // one tab per account on "Limits"; "Verbrauch" is per provider, the logs name no account
+    property int current: 0
+    readonly property var accounts: info && info.accounts ? info.accounts : []
+    readonly property var acc: accounts.length ? accounts[Math.min(current, accounts.length - 1)] : null
 
     spacing: 0
     Layout.preferredWidth: Kirigami.Units.gridUnit * 24
@@ -36,8 +40,21 @@ ColumnLayout {
         }
     }
     PC3.TabBar {
+        id: tabBar
         Layout.fillWidth: true
-        PC3.TabButton { text: "● Claude"; checked: true }
+        // a click sets currentIndex itself and would break a plain binding; Binding re-applies it
+        Binding on currentIndex {
+            value: view.page === "limits" ? Math.max(0, Math.min(view.current, view.accounts.length - 1)) : 0
+        }
+        Repeater {
+            model: view.page === "limits" && view.accounts.length > 1 ? view.accounts : [{ title: "Claude" }]
+            PC3.TabButton {
+                required property var modelData
+                required property int index
+                text: "● " + modelData.title
+                onClicked: if (view.page === "limits") view.current = index
+            }
+        }
     }
     Kirigami.Separator { Layout.fillWidth: true }
 
@@ -51,7 +68,8 @@ ColumnLayout {
             Loader {
                 Layout.fillWidth: true
                 Layout.margins: Kirigami.Units.largeSpacing
-                sourceComponent: !view.info ? loading : view.page === "limits" ? limitsPage : usagePage
+                sourceComponent: !view.info || (view.page === "limits" && !view.acc) ? loading
+                               : view.page === "limits" ? limitsPage : usagePage
             }
         }
     }
@@ -66,7 +84,9 @@ ColumnLayout {
             elide: Text.ElideRight
             opacity: 0.7
             text: (view.updated ? "Stand " + Qt.formatTime(view.updated, "hh:mm") : "lädt …")
-                  + (view.info && view.info.error ? "  ·  ⚠ " + view.info.error : "")
+                  + (warning ? "  ·  ⚠ " + warning : "")
+            readonly property var warning: view.page === "limits" ? (view.acc ? view.acc.error : null)
+                                                                 : (view.info ? view.info.error : null)
         }
         PC3.ToolButton { icon.name: "view-refresh"; onClicked: view.refreshRequested() }
     }
@@ -77,11 +97,11 @@ ColumnLayout {
         id: limitsPage
         ColumnLayout {
             spacing: Kirigami.Units.largeSpacing * 1.5
-            readonly property real worst: Math.max(0, Math.max.apply(null, view.info.limits.map(function (l) { return l.pct })))
+            readonly property real worst: Math.max(0, Math.max.apply(null, view.acc.limits.map(function (l) { return l.pct })))
             RowLayout {
                 Layout.fillWidth: true
-                Kirigami.Heading { text: "Claude"; level: 3 }
-                PC3.Label { text: view.info.plan; opacity: 0.7; font.family: "monospace" }
+                Kirigami.Heading { text: view.acc.title; level: 3 }
+                PC3.Label { text: view.acc.plan; opacity: 0.7; font.family: "monospace" }
                 Item { Layout.fillWidth: true }
                 PC3.Label {
                     text: Math.round(worst) + " %"
@@ -91,8 +111,15 @@ ColumnLayout {
                     background: Rectangle { radius: height / 2; color: "transparent"; border.width: 1; border.color: view.tint(worst) }
                 }
             }
+            PC3.Label {
+                visible: view.acc.limits.length === 0
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+                text: view.acc.error || "Noch kein Stand – fragt beim nächsten Takt ab."
+            }
             Repeater {
-                model: view.info.limits
+                model: view.acc.limits
                 ColumnLayout {
                     id: row
                     required property var modelData
@@ -134,10 +161,10 @@ ColumnLayout {
                     }
                 }
             }
-            Kirigami.Separator { Layout.fillWidth: true; visible: view.info.extra !== null }
+            Kirigami.Separator { Layout.fillWidth: true; visible: view.acc.extra !== null }
             PC3.Label {
-                visible: view.info.extra !== null
-                text: view.info.extra || ""
+                visible: view.acc.extra !== null
+                text: view.acc.extra || ""
                 font.family: "monospace"
                 padding: 8
                 background: Rectangle { radius: 8; color: Kirigami.Theme.alternateBackgroundColor }
@@ -153,7 +180,10 @@ ColumnLayout {
             readonly property var agg: U.aggregate(view.info.usage, view.rangeDays, Qt.locale())
             RowLayout {
                 Kirigami.Heading { text: "Claude"; level: 3 }
-                PC3.Label { text: view.info.plan; opacity: 0.7; font.family: "monospace" }
+                PC3.Label {
+                    text: view.accounts.length > 1 ? view.accounts.length + " Konten" : (view.acc ? view.acc.plan : "")
+                    opacity: 0.7; font.family: "monospace"
+                }
             }
             RowLayout {
                 Layout.fillWidth: true
@@ -229,7 +259,9 @@ ColumnLayout {
                 wrapMode: Text.WordWrap
                 opacity: 0.7
                 font.pointSize: Kirigami.Theme.smallFont.pointSize
-                text: "Lokal gezählte Tokens aus den Sitzungsprotokollen × Listenpreis"
+                text: "Lokal gezählte Tokens aus den Sitzungsprotokollen"
+                      + (view.accounts.length > 1 ? " aller " + view.accounts.length + " Konten zusammen (die Protokolle nennen kein Konto)" : "")
+                      + " × Listenpreis"
                       + (view.info.priceDate ? " (Stand " + view.info.priceDate + ")" : "")
                       + ", inkl. Cache-Tarife. Keine Abrechnungsdaten – nur, was derselbe Verbrauch über die API gekostet hätte."
                       + (usage.agg.unpriced ? " Modelle ohne Listenpreis sind nicht eingerechnet." : "")

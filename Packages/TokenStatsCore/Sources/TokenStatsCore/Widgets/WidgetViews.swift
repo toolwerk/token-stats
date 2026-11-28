@@ -85,7 +85,7 @@ public struct UsageWidgetView: View {
     }
 
     private var title: String {
-        provider.flatMap { snapshot?.provider($0)?.name } ?? "Verbrauch"
+        provider.flatMap { snapshot?.providerName(kind: $0) } ?? "Verbrauch"
     }
 
     @ViewBuilder
@@ -272,8 +272,10 @@ public struct LimitsWidgetView: View {
                     WidgetHeader(title: "Limits", detail: nil, severity: nil)
                     noData(snapshot.providers.first)
                 } else {
+                    // Ab vier Konten passt je Konto nur eine Zeile, sonst fällt das letzte unten heraus.
+                    let maxWindows = providers.count > 3 ? 2 : 4
                     ForEach(providers) { provider in
-                        section(provider, columns: 2, maxWindows: 4, compact: true)
+                        section(provider, columns: 2, maxWindows: maxWindows, compact: true)
                     }
                 }
                 Spacer(minLength: 0)

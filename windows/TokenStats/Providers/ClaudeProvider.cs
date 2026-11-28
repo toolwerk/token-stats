@@ -9,36 +9,64 @@ namespace TokenStats.Providers;
 /// → <c>api.anthropic.com/api/oauth/usage</c>.
 ///
 /// Unter Windows gibt es keinen Schlüsselbund-Eintrag; Claude Code schreibt die Zugangsdaten
-/// in diese Datei. Das Token wird nur gelesen und nie erneuert: Ein Refresh rotiert das
+/// in diese Datei. Weitere Konten über <c>CLAUDE_CONFIG_DIR</c>: <c>&lt;ordner&gt;\.credentials.json</c>. Das Token wird nur gelesen und nie erneuert: Ein Refresh rotiert das
 /// Refresh-Token, und ohne Zurückschreiben wäre Claude Code danach abgemeldet.
 /// Läuft es ab, erneuert Claude Code es beim nächsten Start selbst.
 /// </summary>
 public sealed partial class ClaudeProvider : IUsageProvider
 {
-    public string Id => "claude";
+    public string Kind => "claude";
     public string DisplayName => "Claude";
+    public AccountSource Source { get; }
 
     static readonly Uri UsageUrl = new("https://api.anthropic.com/api/oauth/usage");
     const string Hint = "»claude« im Terminal einmal starten.";
 
     static string Home => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-    static string CredentialsFile => Path.Combine(Home, ".claude", ".credentials.json");
 
-    public bool IsInstalled() => Directory.Exists(Path.Combine(Home, ".claude"));
+    /// <summary><paramref name="configDirectory"/> = <c>CLAUDE_CONFIG_DIR</c> eines weiteren Kontos; <c>null</c> = Standardkonto.</summary>
+    public ClaudeProvider(string? configDirectory = null, AccountOrigin origin = AccountOrigin.Detected)
+    {
+        var folder = configDirectory is null ? null : Path.GetFullPath(configDirectory).TrimEnd(Path.DirectorySeparatorChar);
+        var account = ReadAccount(GlobalConfig(folder));
+        Source = new AccountSource
+        {
+            Folder = folder, Origin = folder is null ? AccountOrigin.Standard : origin,
+            Identity = account?.Uuid, Email = account?.Email, Name = account?.Name,
+        };
+    }
+
+    public string Id => Source.Folder is { } folder ? $"{Kind}@{FolderHash.Of(folder)}" : Kind;
+
+    string ConfigDirectory => Source.Folder ?? Path.Combine(Home, ".claude");
+    string CredentialsFile => Path.Combine(ConfigDirectory, ".credentials.json");
+    /// <summary>Logs dieses Kontos, für die Verbrauchsseite.</summary>
+    public string ProjectsDirectory => Path.Combine(ConfigDirectory, "projects");
+
+    /// <summary><c>~\.claude.json</c> beim Standardkonto, sonst <c>&lt;ordner&gt;\.claude.json</c>.</summary>
+    static string GlobalConfig(string? folder) => folder is null ? Path.Combine(Home, ".claude.json") : Path.Combine(folder, ".claude.json");
+
+    /// <summary>Beim zweiten Konto nennt der Hinweis den Ordner – ein schlichtes <c>claude</c> erneuert nur das Standardkonto.</summary>
+    string RefreshHint => Source.Folder is { } folder
+        ? $"»$env:CLAUDE_CONFIG_DIR=\"{folder}\"; claude« im Terminal einmal starten."
+        : Hint;
+
+    public bool IsInstalled() => Directory.Exists(ConfigDirectory);
 
     public async Task<ProviderSnapshot> FetchAsync()
     {
-        var credentials = LoadCredentials() ?? throw ProviderException.NotLoggedIn(Hint);
+        var credentials = LoadCredentials() ?? throw ProviderException.NotLoggedIn(RefreshHint);
         if (credentials.ExpiresAt is { } expiresAt && expiresAt < DateTimeOffset.UtcNow)
-            throw ProviderException.TokenExpired(Hint);
+            throw ProviderException.TokenExpired(RefreshHint);
 
         var data = await Http.GetJsonAsync(UsageUrl, new Dictionary<string, string>
         {
             ["Authorization"] = $"Bearer {credentials.AccessToken}",
             ["anthropic-beta"] = "oauth-2025-04-20",
-        }, Hint);
+        }, RefreshHint);
         var snapshot = Parse(data, DateTimeOffset.UtcNow);
-        snapshot.Account = new AccountInfo(AccountName(), credentials.Plan);
+        var account = ReadAccount(GlobalConfig(Source.Folder));
+        snapshot.Account = new AccountInfo(account?.Name ?? account?.Email, credentials.Plan);
         return snapshot;
     }
 
@@ -46,7 +74,7 @@ public sealed partial class ClaudeProvider : IUsageProvider
 
     public sealed record Credentials(string AccessToken, DateTimeOffset? ExpiresAt, string? Plan);
 
-    static Credentials? LoadCredentials()
+    Credentials? LoadCredentials()
     {
         try { return ParseCredentials(File.ReadAllBytes(CredentialsFile)); }
         catch (IOException) { return null; }
@@ -75,17 +103,22 @@ public sealed partial class ClaudeProvider : IUsageProvider
     [GeneratedRegex(@"_(\d+)x$")]
     private static partial Regex TierPattern();
 
-    /// <summary>Anzeigename aus <c>~/.claude.json</c> (Kontodaten, keine Zugangsdaten).</summary>
-    static string? AccountName()
+    public sealed record Account(string? Uuid, string? Email, string? Name);
+
+    /// <summary>Kontodaten aus <c>.claude.json</c> (keine Zugangsdaten).</summary>
+    static Account? ReadAccount(string file)
     {
-        try
-        {
-            var account = JsonRead.ParseObject(File.ReadAllBytes(Path.Combine(Home, ".claude.json"))).Obj("oauthAccount");
-            var name = account.Str("displayName") ?? account.Str("emailAddress");
-            return string.IsNullOrEmpty(name) ? null : name;
-        }
+        try { return ParseAccount(File.ReadAllBytes(file)); }
         catch (IOException) { return null; }
         catch (UnauthorizedAccessException) { return null; }
+    }
+
+    public static Account? ParseAccount(byte[] data)
+    {
+        var account = JsonRead.ParseObject(data).Obj("oauthAccount");
+        if (account is null) return null;
+        static string? NonEmpty(string? text) => string.IsNullOrEmpty(text) ? null : text;
+        return new Account(NonEmpty(account.Str("accountUuid")), NonEmpty(account.Str("emailAddress")), NonEmpty(account.Str("displayName")));
     }
 
     // Antwort
